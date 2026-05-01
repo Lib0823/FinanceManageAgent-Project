@@ -1,0 +1,8 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="FullStack" type="CompoundRunConfigurationType">
+    <toRun name="postgres" type="docker-deploy" />
+    <toRun name="WebApp" type="js.build_tools.npm" />
+    <toRun name="ApiServer" type="SpringBootApplicationConfigurationType" />
+    <method v="2" />
+  </configuration>
+</component>

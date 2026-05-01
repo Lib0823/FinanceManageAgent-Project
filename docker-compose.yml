@@ -16,6 +16,12 @@ services:
     networks:
       - financemanage-network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d financemanage"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   # api-server (Spring Boot) - 추후 활성화
   # api-server:

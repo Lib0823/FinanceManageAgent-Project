@@ -14,6 +14,10 @@ spring:
       connection-timeout: 30000
       idle-timeout: 600000
       max-lifetime: 1800000
+      # DB 연결 재시도 설정 (Compound 동시 실행 지원)
+      initialization-fail-timeout: 60000  # 60초 동안 재시도
+      connection-test-query: SELECT 1
+      keepalive-time: 30000  # 30초마다 연결 유지 확인
 
   # JPA Configuration
   jpa:
