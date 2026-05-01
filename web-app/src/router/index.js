@@ -109,6 +109,11 @@ const router = createRouter({
       component: () => import('../views/detail/NewsDetailView.vue')
     },
     {
+      path: '/market-analysis',
+      name: 'market-analysis',
+      component: () => import('../views/analysis/MarketAnalysisView.vue')
+    },
+    {
       path: '/transfer',
       name: 'transfer',
       component: () => import('../views/detail/TransferView.vue')

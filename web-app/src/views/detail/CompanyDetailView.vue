@@ -7,7 +7,8 @@ import { mockCompanyInfo } from '@/services/mockData'
 const route = useRoute()
 const router = useRouter()
 
-const activeTab = ref('basic')
+const activeTab = ref('ai')
+const aiSubTab = ref('quant')
 const company = ref(mockCompanyInfo)
 const isFavorite = ref(false)
 
@@ -16,10 +17,16 @@ const toggleFavorite = () => {
 }
 
 const tabs = [
-  { key: 'basic', label: '기본정보' },
   { key: 'ai', label: 'AI분석' },
+  { key: 'basic', label: '기본정보' },
   { key: 'financial', label: '재무제표' },
   { key: 'disclosure', label: '공시정보' }
+]
+
+const aiSubTabs = [
+  { key: 'quant', label: '정량분석' },
+  { key: 'sentiment', label: '감성분석' },
+  { key: 'timeseries', label: '시계열' }
 ]
 
 const aiAnalysis = ref({
@@ -102,6 +109,57 @@ const disclosures = ref([
     important: true
   }
 ])
+
+// AI 분석 데이터
+const quantAnalysis = ref({
+  stats: [
+    { label: '외국인\n순매수', value: '+2,840억', class: 'up' },
+    { label: '기관\n순매수', value: '+620억', class: 'up' },
+    { label: '거래량\n배율', value: '3.2x', class: 'yw' },
+    { label: '종가\n위치', value: '0.74', class: 'nt' }
+  ],
+  kisFeatures: [
+    { label: '외국인 순매수', source: 'KIS 수급', value: '+2,840억', percent: 88, class: 'up' },
+    { label: '기관 순매수', source: 'KIS 수급', value: '+620억', percent: 42, class: 'yw' },
+    { label: '장초반 수익률', source: 'KIS 가격', value: '+0.82%', percent: 60, class: 'nt' },
+    { label: '종가 위치', source: 'KIS 가격', value: '0.74', percent: 74, class: 'purple' }
+  ],
+  dartMetrics: [
+    { label: 'PER', value: '38.7', class: 'up' },
+    { label: 'ROE (%)', value: '18.5%', class: 'nt' },
+    { label: '영업이익률', value: '19.8%', class: 'yw' }
+  ]
+})
+
+const sentimentAnalysis = ref({
+  stockSentiment: { score: 0.44, label: '긍정', newsCount: 5 },
+  marketSentiment: { score: 0.28, label: '긍정 우세', newsCount: 24 },
+  difference: 0.16,
+  stockNewsRange: '전날 18:00 — 당일 08:50',
+  marketDistribution: { positive: 57, neutral: 30, negative: 13 },
+  marketSources: '한경 · 매경 · 연합뉴스'
+})
+
+const timeseriesAnalysis = ref({
+  stats: [
+    { label: 'price\ntrend', value: '+0.31', class: 'up' },
+    { label: 'volume\ntrend', value: '+0.18', class: 'up' },
+    { label: 'uncertainty', value: '2.4%', class: 'yw' },
+    { label: '학습\n거래일', value: '120일', class: 'nt' }
+  ],
+  features: [
+    { label: '가격 추세', source: 'price_trend', value: '+0.31', percent: 62, class: 'up' },
+    { label: '거래량 추세', source: 'vol_trend', value: '+0.18', percent: 36, class: 'yw' },
+    { label: '예측 불확실성', source: 'uncertainty', value: '2.4%', percent: 24, class: 'nt' }
+  ],
+  forecasts: [
+    { day: 'D+1', yhat: '178,200', upper: '181,400', lower: '175,100', uncertainty: '1.8%' },
+    { day: 'D+2', yhat: '179,800', upper: '184,200', lower: '175,500', uncertainty: '2.1%' },
+    { day: 'D+3', yhat: '181,400', upper: '187,800', lower: '175,200', uncertainty: '2.8%' },
+    { day: 'D+4', yhat: '182,900', upper: '190,400', lower: '175,600', uncertainty: '2.7%' },
+    { day: 'D+5', yhat: '184,500', upper: '193,200', lower: '176,000', uncertainty: '2.9%' }
+  ]
+})
 
 const formatNumber = (num) => {
   return new Intl.NumberFormat('ko-KR').format(num)
@@ -232,112 +290,300 @@ onMounted(() => {
             <p class="info-desc">{{ company.description }}</p>
           </div>
         </div>
-
-        <!-- Action Buttons -->
-        <div class="action-buttons">
-          <button class="action-btn news" @click="goToNews">뉴스</button>
-          <button class="action-btn trade" @click="goToTrade">매매</button>
-        </div>
       </div>
 
       <!-- AI Analysis Tab -->
       <div v-else-if="activeTab === 'ai'" class="tab-content">
-        <div class="ai-analysis-content">
-          <!-- Compact AI Score Section -->
-          <div class="ai-compact-header">
-            <div class="ai-score-compact">
-              <div class="score-circle-small">
-                <svg viewBox="0 0 80 80">
-                  <circle cx="40" cy="40" r="36" fill="none" stroke="#374151" stroke-width="6"/>
-                  <circle
-                    cx="40" cy="40" r="36"
-                    fill="none"
-                    stroke="url(#gradient)"
-                    stroke-width="6"
-                    :stroke-dasharray="`${aiAnalysis.score * 2.26} 226`"
-                    transform="rotate(-90 40 40)"
-                    stroke-linecap="round"
-                  />
-                  <defs>
-                    <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                      <stop offset="0%" style="stop-color:#4F46E5;stop-opacity:1" />
-                      <stop offset="100%" style="stop-color:#7C3AED;stop-opacity:1" />
-                    </linearGradient>
-                  </defs>
-                </svg>
-                <div class="score-content-small">
-                  <span class="score-value-small">{{ aiAnalysis.score }}</span>
-                </div>
-              </div>
-              <div class="ai-info-compact">
-                <div class="ai-header-inline">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                    <path d="M12 2L2 7l10 5 10-5-10-5z" stroke="#A78BFA" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    <path d="M2 17l10 5 10-5" stroke="#A78BFA" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    <path d="M2 12l10 5 10-5" stroke="#A78BFA" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <!-- AI Sub Tabs -->
+        <div class="ai-sub-tabs">
+          <button
+            v-for="subTab in aiSubTabs"
+            :key="subTab.key"
+            :class="['ai-sub-tab', { active: aiSubTab === subTab.key }]"
+            @click="aiSubTab = subTab.key"
+          >
+            {{ subTab.label }}
+          </button>
+        </div>
+
+        <!-- 정량분석 -->
+        <div v-if="aiSubTab === 'quant'" class="ai-tab-sections">
+          <!-- KIS·DART 피처 분포 차트 -->
+          <div class="ai-section">
+            <div class="section-label">KIS · DART 피처 분포</div>
+            <div class="analysis-card">
+              <div class="chart-wrapper">
+                <div class="chart-placeholder">
+                  <svg width="100%" height="170" viewBox="0 0 100 50" preserveAspectRatio="none">
+                    <rect x="0" y="30" width="20" height="20" fill="#F87171" opacity="0.3"/>
+                    <rect x="25" y="20" width="20" height="30" fill="#60A5FA" opacity="0.3"/>
+                    <rect x="50" y="15" width="20" height="35" fill="#34D399" opacity="0.3"/>
+                    <rect x="75" y="25" width="20" height="25" fill="#FBBF24" opacity="0.3"/>
                   </svg>
-                  <h3 class="ai-title-compact">AI 투자 분석</h3>
+                  <div class="chart-badge">KIS 4개 + DART 3개 피처</div>
                 </div>
-                <div class="badges-row">
-                  <div class="rating-badge-small" :class="aiAnalysis.rating">{{ aiAnalysis.rating }}</div>
-                  <div class="recommendation-badge-small" :class="aiAnalysis.recommendation">
-                    {{ aiAnalysis.recommendation }}
+                <div class="stat-row">
+                  <div v-for="(stat, idx) in quantAnalysis.stats" :key="idx" class="stat-item">
+                    <div class="stat-label" v-html="stat.label.replace('\n', '<br>')"></div>
+                    <div class="stat-value" :class="stat.class">{{ stat.value }}</div>
                   </div>
                 </div>
               </div>
             </div>
           </div>
 
-          <div class="analysis-section">
-            <h4 class="section-title">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-              </svg>
-              추천 이유
-            </h4>
-            <ul class="reason-list">
-              <li v-for="(reason, index) in aiAnalysis.reasons" :key="index">{{ reason }}</li>
-            </ul>
-          </div>
-
-          <div class="analysis-section">
-            <h4 class="section-title">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M13 10V3L4 14h7v7l9-11h-7z"/>
-              </svg>
-              주요 강점
-            </h4>
-            <div class="strength-list">
-              <div v-for="(strength, index) in aiAnalysis.strengths" :key="index" class="strength-item">
-                <div class="strength-header">
-                  <span class="strength-title">{{ strength.title }}</span>
-                  <span class="strength-score">{{ strength.score }}점</span>
-                </div>
-                <div class="strength-bar">
-                  <div class="strength-progress" :style="{ width: `${strength.score}%` }"></div>
+          <!-- KIS 피처 상세 -->
+          <div class="ai-section">
+            <div class="section-label">KIS 피처 상세</div>
+            <div class="analysis-card">
+              <div class="feature-list">
+                <div v-for="(feature, idx) in quantAnalysis.kisFeatures" :key="idx" class="feature-row">
+                  <div class="feature-label">{{ feature.label }}</div>
+                  <div class="feature-source">{{ feature.source }}</div>
+                  <div class="feature-bar-wrap">
+                    <div class="feature-bar-track">
+                      <div
+                        class="feature-bar-fill"
+                        :class="feature.class"
+                        :style="{ width: `${feature.percent}%` }"
+                      ></div>
+                    </div>
+                  </div>
+                  <div class="feature-value" :class="feature.class">{{ feature.value }}</div>
                 </div>
               </div>
             </div>
           </div>
 
-          <div class="analysis-section">
-            <h4 class="section-title warning">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-              </svg>
-              유의사항
-            </h4>
-            <ul class="warning-list">
-              <li v-for="(warning, index) in aiAnalysis.warnings" :key="index">{{ warning }}</li>
-            </ul>
+          <!-- DART 재무지표 -->
+          <div class="ai-section">
+            <div class="section-label">DART 재무지표</div>
+            <div class="analysis-card">
+              <div class="card-sublabel">분기 기준 · DART API 공시 데이터</div>
+              <div class="metrics-list">
+                <div v-for="(metric, idx) in quantAnalysis.dartMetrics" :key="idx" class="metrics-row">
+                  <div class="metrics-label">{{ metric.label }}</div>
+                  <div class="metrics-value" :class="metric.class">{{ metric.value }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 감성분석 -->
+        <div v-else-if="aiSubTab === 'sentiment'" class="ai-tab-sections">
+          <!-- 감성점수 비교 -->
+          <div class="ai-section">
+            <div class="section-label">감성점수 비교</div>
+            <div class="analysis-card">
+              <div class="sentiment-compare">
+                <div class="sentiment-box">
+                  <div class="sentiment-header">종목 감성</div>
+                  <div class="sentiment-meta">네이버금융 · {{ sentimentAnalysis.stockSentiment.newsCount }}건</div>
+                  <div class="sentiment-score up">{{ sentimentAnalysis.stockSentiment.score > 0 ? '+' : '' }}{{ sentimentAnalysis.stockSentiment.score }}</div>
+                  <div class="sentiment-badge positive">{{ sentimentAnalysis.stockSentiment.label }}</div>
+                  <div class="sentiment-footer">시간 가중 평균</div>
+                </div>
+                <div class="sentiment-box">
+                  <div class="sentiment-header">시장 전반</div>
+                  <div class="sentiment-meta">RSS 피드 · 3개 출처</div>
+                  <div class="sentiment-score up">{{ sentimentAnalysis.marketSentiment.score > 0 ? '+' : '' }}{{ sentimentAnalysis.marketSentiment.score }}</div>
+                  <div class="sentiment-badge positive">{{ sentimentAnalysis.marketSentiment.label }}</div>
+                  <div class="sentiment-footer">시간 가중 평균</div>
+                </div>
+              </div>
+              <div class="sentiment-diff">
+                <div class="diff-label">종목 − 시장 전반</div>
+                <div class="diff-value">+{{ sentimentAnalysis.difference }} ↑</div>
+              </div>
+              <div class="diff-desc">시장 평균 대비 긍정 신호 우위</div>
+            </div>
           </div>
 
-          <!-- Disclaimer -->
-          <div class="ai-disclaimer">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-            </svg>
-            <p>본 분석은 AI를 통해 생성된 참고 자료이며, 투자 판단 및 그에 따른 결과에 대한 책임은 투자자 본인에게 있습니다.</p>
+          <!-- 종목 감성 상세 -->
+          <div class="ai-section">
+            <div class="section-label">종목 감성 상세</div>
+            <div class="analysis-card">
+              <div class="card-sublabel">stock_code = 000660 · news_analysis 테이블</div>
+
+              <!-- 감성 척도 바 -->
+              <div class="sentiment-scale">
+                <div class="scale-labels">
+                  <span>-1.0 부정</span>
+                  <span>0 중립</span>
+                  <span>긍정 +1.0</span>
+                </div>
+                <div class="scale-bar">
+                  <div
+                    class="market-marker"
+                    :style="{ left: `calc(50% + ${sentimentAnalysis.marketSentiment.score / 2 * 100}%)` }"
+                  ></div>
+                  <div
+                    class="stock-marker"
+                    :style="{ left: `calc(50% + ${sentimentAnalysis.stockSentiment.score / 2 * 100}%)` }"
+                  ></div>
+                </div>
+                <div class="scale-legend">
+                  <span class="market-legend">▲ 시장 +{{ sentimentAnalysis.marketSentiment.score }}</span>
+                  <span class="stock-legend">● 종목 +{{ sentimentAnalysis.stockSentiment.score }}</span>
+                </div>
+              </div>
+
+              <!-- 수집 메타 -->
+              <div class="meta-grid">
+                <div class="meta-box">
+                  <div class="meta-label">수집 뉴스</div>
+                  <div class="meta-value">{{ sentimentAnalysis.stockSentiment.newsCount }}건</div>
+                </div>
+                <div class="meta-box">
+                  <div class="meta-label">수집 범위</div>
+                  <div class="meta-value-multi">{{ sentimentAnalysis.stockNewsRange }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 시장 전반 감성 상세 -->
+          <div class="ai-section">
+            <div class="section-label">시장 전반 감성 상세</div>
+            <div class="analysis-card">
+              <div class="card-sublabel">stock_code = NULL · RSS 피드 · {{ sentimentAnalysis.marketSources }}</div>
+
+              <!-- 긍정/중립/부정 분포 바 -->
+              <div class="distribution-section">
+                <div class="distribution-label">코스피 100 기준 종목 분포</div>
+                <div class="distribution-bar">
+                  <div class="dist-positive" :style="{ flex: sentimentAnalysis.marketDistribution.positive }"></div>
+                  <div class="dist-neutral" :style="{ flex: sentimentAnalysis.marketDistribution.neutral }"></div>
+                  <div class="dist-negative" :style="{ flex: sentimentAnalysis.marketDistribution.negative }"></div>
+                </div>
+                <div class="distribution-legend">
+                  <span class="legend-positive">긍정 17개 ({{ sentimentAnalysis.marketDistribution.positive }}%)</span>
+                  <span class="legend-neutral">중립 9개 ({{ sentimentAnalysis.marketDistribution.neutral }}%)</span>
+                  <span class="legend-negative">부정 4개 ({{ sentimentAnalysis.marketDistribution.negative }}%)</span>
+                </div>
+              </div>
+
+              <!-- 수집 메타 -->
+              <div class="meta-grid">
+                <div class="meta-box">
+                  <div class="meta-label">분석 뉴스</div>
+                  <div class="meta-value">{{ sentimentAnalysis.marketSentiment.newsCount }}건</div>
+                </div>
+                <div class="meta-box">
+                  <div class="meta-label">출처</div>
+                  <div class="meta-value-multi">{{ sentimentAnalysis.marketSources }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 시계열 -->
+        <div v-else-if="aiSubTab === 'timeseries'" class="ai-tab-sections">
+          <!-- Prophet 예측 차트 -->
+          <div class="ai-section">
+            <div class="section-label">Prophet D+1~D+5 가격 예측</div>
+            <div class="analysis-card">
+              <div class="chart-wrapper">
+                <div class="chart-placeholder">
+                  <svg width="100%" height="170" viewBox="0 0 100 50" preserveAspectRatio="none">
+                    <polyline
+                      points="0,40 20,35 40,30 60,25 80,20 100,15"
+                      fill="none"
+                      stroke="#60A5FA"
+                      stroke-width="0.5"
+                      opacity="0.5"
+                    />
+                    <polyline
+                      points="0,30 20,28 40,26 60,24 80,22 100,20"
+                      fill="none"
+                      stroke="#F87171"
+                      stroke-width="1"
+                    />
+                  </svg>
+                  <div class="chart-badge">Prophet · 120거래일 기반 · 신뢰구간 포함</div>
+                </div>
+                <div class="stat-row">
+                  <div v-for="(stat, idx) in timeseriesAnalysis.stats" :key="idx" class="stat-item">
+                    <div class="stat-label" v-html="stat.label.replace('\n', '<br>')"></div>
+                    <div class="stat-value" :class="stat.class">{{ stat.value }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 예측 피처 상세 -->
+          <div class="ai-section">
+            <div class="section-label">예측 피처 상세</div>
+            <div class="analysis-card">
+              <div class="card-sublabel">D+1~D+5 선형회귀 기울기 · Gemini 입력 피처</div>
+              <div class="feature-list">
+                <div v-for="(feature, idx) in timeseriesAnalysis.features" :key="idx" class="feature-row">
+                  <div class="feature-label">{{ feature.label }}</div>
+                  <div class="feature-source">{{ feature.source }}</div>
+                  <div class="feature-bar-wrap">
+                    <div class="feature-bar-track">
+                      <div
+                        class="feature-bar-fill"
+                        :class="feature.class"
+                        :style="{ width: `${feature.percent}%` }"
+                      ></div>
+                    </div>
+                  </div>
+                  <div class="feature-value" :class="feature.class">{{ feature.value }}</div>
+                </div>
+              </div>
+
+              <!-- 방향 요약 -->
+              <div class="trend-summary">
+                <div class="trend-summary-label">종합 추세 판단</div>
+                <div class="trend-cards">
+                  <div class="trend-card">
+                    <div class="trend-emoji">📈</div>
+                    <div class="trend-label">가격</div>
+                    <div class="trend-value up">상승</div>
+                  </div>
+                  <div class="trend-card">
+                    <div class="trend-emoji">📈</div>
+                    <div class="trend-label">거래량</div>
+                    <div class="trend-value up">증가</div>
+                  </div>
+                  <div class="trend-card">
+                    <div class="trend-emoji">🎯</div>
+                    <div class="trend-label">신뢰도</div>
+                    <div class="trend-value nt">양호</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 예측 구간 정보 -->
+          <div class="ai-section">
+            <div class="section-label">예측 구간 정보</div>
+            <div class="analysis-card">
+              <div class="card-sublabel">(yhat_upper − yhat_lower) / yhat 평균 · 값이 클수록 신뢰도 낮음</div>
+
+              <!-- D+1~D+5 예측값 테이블 -->
+              <div class="forecast-table">
+                <div class="forecast-header">
+                  <div class="forecast-cell">일자</div>
+                  <div class="forecast-cell">yhat</div>
+                  <div class="forecast-cell">yhat_upper</div>
+                  <div class="forecast-cell">yhat_lower</div>
+                  <div class="forecast-cell">불확실성</div>
+                </div>
+                <div v-for="(forecast, idx) in timeseriesAnalysis.forecasts" :key="idx" class="forecast-row">
+                  <div class="forecast-cell day">{{ forecast.day }}</div>
+                  <div class="forecast-cell">{{ forecast.yhat }}</div>
+                  <div class="forecast-cell up">{{ forecast.upper }}</div>
+                  <div class="forecast-cell dn">{{ forecast.lower }}</div>
+                  <div class="forecast-cell nt">{{ forecast.uncertainty }}</div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1116,4 +1362,557 @@ onMounted(() => {
   flex-shrink: 0;
   margin-top: 2px;
 }
+
+/* AI Analysis Tab Styles */
+.ai-sub-tabs {
+  display: flex;
+  gap: var(--spacing-xs);
+  margin-bottom: var(--spacing-lg);
+  background: var(--color-bg-tertiary);
+  border-radius: var(--radius-lg);
+  padding: 4px;
+}
+
+.ai-sub-tab {
+  flex: 1;
+  padding: var(--spacing-sm) var(--spacing-xs);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-weight: var(--font-weight-medium);
+}
+
+.ai-sub-tab.active {
+  background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(79, 70, 229, 0.3);
+}
+
+.ai-tab-sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+}
+
+.ai-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.section-label {
+  font-size: 10px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.section-label::before {
+  content: '';
+  width: 2px;
+  height: 10px;
+  background: #A78BFA;
+  border-radius: 2px;
+}
+
+.analysis-card {
+  background: linear-gradient(135deg, #1E293B 0%, #334155 100%);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-md);
+}
+
+.card-sublabel {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  margin-bottom: var(--spacing-md);
+}
+
+.chart-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.chart-placeholder {
+  position: relative;
+  width: 100%;
+  background: rgba(20, 27, 43, 0.5);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.chart-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  font-size: 9px;
+  color: var(--color-text-secondary);
+  background: rgba(8, 12, 20, 0.8);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  font-family: 'SF Mono', monospace;
+}
+
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.stat-item {
+  background: rgba(30, 41, 59, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-sm) 4px;
+  text-align: center;
+}
+
+.stat-label {
+  font-size: 7.5px;
+  color: var(--color-text-tertiary);
+  margin-bottom: 4px;
+  line-height: 1.4;
+}
+
+.stat-value {
+  font-size: 13px;
+  font-weight: var(--font-weight-bold);
+  font-family: 'SF Mono', monospace;
+}
+
+.stat-value.up { color: #F87171; }
+.stat-value.dn { color: #60A5FA; }
+.stat-value.nt { color: #2DD4BF; }
+.stat-value.yw { color: #FBBF24; }
+
+.feature-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.feature-row {
+  display: flex;
+  align-items: center;
+  padding: var(--spacing-sm) 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  gap: var(--spacing-xs);
+}
+
+.feature-row:last-child {
+  border-bottom: none;
+}
+
+.feature-label {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+  width: 100px;
+  flex-shrink: 0;
+}
+
+.feature-source {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  width: 50px;
+  flex-shrink: 0;
+}
+
+.feature-bar-wrap {
+  flex: 1;
+  margin: 0 var(--spacing-xs);
+}
+
+.feature-bar-track {
+  height: 5px;
+  background: rgba(55, 65, 81, 0.5);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.feature-bar-fill {
+  height: 5px;
+  border-radius: var(--radius-full);
+  transition: width 0.5s ease;
+}
+
+.feature-bar-fill.up { background: #F87171; }
+.feature-bar-fill.dn { background: #60A5FA; }
+.feature-bar-fill.nt { background: #2DD4BF; }
+.feature-bar-fill.yw { background: #FBBF24; }
+.feature-bar-fill.purple { background: #A78BFA; }
+
+.feature-value {
+  font-size: 11px;
+  font-weight: var(--font-weight-bold);
+  font-family: 'SF Mono', monospace;
+  width: 50px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.feature-value.up { color: #F87171; }
+.feature-value.dn { color: #60A5FA; }
+.feature-value.nt { color: #2DD4BF; }
+.feature-value.yw { color: #FBBF24; }
+.feature-value.purple { color: #A78BFA; }
+
+.metrics-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.metrics-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-sm) 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.metrics-row:last-child {
+  border-bottom: none;
+}
+
+.metrics-label {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+}
+
+.metrics-value {
+  font-size: 13px;
+  font-weight: var(--font-weight-bold);
+  font-family: 'SF Mono', monospace;
+}
+
+.metrics-value.up { color: #F87171; }
+.metrics-value.dn { color: #60A5FA; }
+.metrics-value.nt { color: #2DD4BF; }
+.metrics-value.yw { color: #FBBF24; }
+
+/* 감성분석 스타일 */
+.sentiment-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.sentiment-box {
+  padding: var(--spacing-md);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+}
+
+.sentiment-box:first-child {
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.sentiment-header {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+}
+
+.sentiment-meta {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+}
+
+.sentiment-score {
+  font-size: 26px;
+  font-weight: var(--font-weight-bold);
+  font-family: 'SF Mono', monospace;
+  line-height: 1;
+  margin: 4px 0;
+}
+
+.sentiment-score.up { color: #F87171; }
+
+.sentiment-badge {
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  font-size: 10px;
+  font-weight: var(--font-weight-semibold);
+}
+
+.sentiment-badge.positive {
+  background: rgba(248, 113, 113, 0.12);
+  color: #F87171;
+  border: 1px solid rgba(248, 113, 113, 0.2);
+}
+
+.sentiment-footer {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  margin-top: 4px;
+}
+
+.sentiment-diff {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--spacing-md);
+  background: rgba(30, 41, 59, 0.5);
+  margin-top: var(--spacing-md);
+  border-radius: var(--radius-md);
+}
+
+.diff-label {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+}
+
+.diff-value {
+  font-size: 12px;
+  font-weight: var(--font-weight-bold);
+  font-family: 'SF Mono', monospace;
+  color: #F87171;
+}
+
+.diff-desc {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+  margin-top: var(--spacing-sm);
+}
+
+.sentiment-scale {
+  margin-bottom: var(--spacing-md);
+}
+
+.scale-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  margin-bottom: 6px;
+}
+
+.scale-bar {
+  position: relative;
+  height: 10px;
+  background: linear-gradient(to right, #60A5FA, rgba(55, 65, 81, 0.5) 50%, #F87171);
+  border-radius: var(--radius-full);
+}
+
+.market-marker {
+  position: absolute;
+  top: -3px;
+  transform: translateX(-50%);
+  width: 2px;
+  height: 16px;
+  background: #FBBF24;
+  border-radius: 1px;
+}
+
+.stock-marker {
+  position: absolute;
+  top: -5px;
+  transform: translateX(-50%);
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #F87171;
+  border: 2px solid #1E293B;
+  box-shadow: 0 0 8px rgba(248, 113, 113, 0.5);
+}
+
+.scale-legend {
+  display: flex;
+  justify-content: space-between;
+  font-size: 8.5px;
+  margin-top: 6px;
+  font-family: 'SF Mono', monospace;
+}
+
+.market-legend {
+  color: #FBBF24;
+}
+
+.stock-legend {
+  color: #F87171;
+}
+
+.meta-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-xs);
+}
+
+.meta-box {
+  background: rgba(30, 41, 59, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-sm);
+}
+
+.meta-label {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  margin-bottom: 3px;
+}
+
+.meta-value {
+  font-size: 15px;
+  font-weight: var(--font-weight-bold);
+  font-family: 'SF Mono', monospace;
+  color: var(--color-text-primary);
+}
+
+.meta-value-multi {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+  line-height: 1.4;
+  margin-top: 2px;
+}
+
+.distribution-section {
+  margin-bottom: var(--spacing-md);
+}
+
+.distribution-label {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  margin-bottom: 6px;
+}
+
+.distribution-bar {
+  display: flex;
+  height: 8px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.dist-positive {
+  background: #F87171;
+  border-radius: 3px 0 0 3px;
+}
+
+.dist-neutral {
+  background: #4A5568;
+}
+
+.dist-negative {
+  background: #60A5FA;
+  border-radius: 0 3px 3px 0;
+}
+
+.distribution-legend {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  margin-top: 5px;
+  font-family: 'SF Mono', monospace;
+}
+
+.legend-positive { color: #F87171; }
+.legend-neutral { color: #4A5568; }
+.legend-negative { color: #60A5FA; }
+
+/* 시계열 스타일 */
+.trend-summary {
+  margin-top: var(--spacing-md);
+  padding-top: var(--spacing-md);
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.trend-summary-label {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  margin-bottom: var(--spacing-sm);
+}
+
+.trend-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--spacing-xs);
+}
+
+.trend-card {
+  background: rgba(248, 113, 113, 0.08);
+  border: 1px solid rgba(248, 113, 113, 0.2);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-sm);
+  text-align: center;
+}
+
+.trend-card:last-child {
+  background: rgba(52, 211, 153, 0.08);
+  border: 1px solid rgba(52, 211, 153, 0.2);
+}
+
+.trend-emoji {
+  font-size: 18px;
+  margin-bottom: 4px;
+}
+
+.trend-label {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+}
+
+.trend-value {
+  font-size: 12px;
+  font-weight: var(--font-weight-bold);
+  margin-top: 2px;
+}
+
+.trend-value.up { color: #F87171; }
+.trend-value.nt { color: #2DD4BF; }
+
+.forecast-table {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.forecast-header {
+  display: flex;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+}
+
+.forecast-row {
+  display: flex;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 11px;
+  font-family: 'SF Mono', monospace;
+}
+
+.forecast-row:last-child {
+  border-bottom: none;
+}
+
+.forecast-cell {
+  flex: 1;
+  text-align: right;
+  color: var(--color-text-primary);
+}
+
+.forecast-cell:first-child {
+  text-align: left;
+}
+
+.forecast-cell.day {
+  color: var(--color-text-tertiary);
+}
+
+.forecast-cell.up { color: #F87171; }
+.forecast-cell.dn { color: #60A5FA; }
+.forecast-cell.nt { color: #2DD4BF; }
 </style>

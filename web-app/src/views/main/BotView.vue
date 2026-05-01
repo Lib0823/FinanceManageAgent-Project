@@ -89,6 +89,10 @@ const goToTrade = (stock) => {
 const goToInfo = (stock) => {
   router.push(`/company/${stock.symbol}`)
 }
+
+const goToMarketAnalysis = () => {
+  router.push('/market-analysis')
+}
 </script>
 
 <template>
@@ -212,6 +216,25 @@ const goToInfo = (stock) => {
           </svg>
         </button>
       </div>
+
+      <!-- AI Market Analysis Button -->
+      <button class="market-analysis-btn" @click="goToMarketAnalysis">
+        <div class="btn-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
+            <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83" stroke="currentColor" stroke-width="2"/>
+          </svg>
+        </div>
+        <div class="btn-content">
+          <div class="btn-title">AI 시장 분석</div>
+          <div class="btn-subtitle">30종목 히트맵 · Gemini TOP3 · 시장 감성</div>
+        </div>
+        <div class="btn-arrow">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path d="M9 18l6-6-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+      </button>
 
       <!-- Divider -->
       <div class="section-divider"></div>
@@ -1010,5 +1033,69 @@ const goToInfo = (stock) => {
 
 .save-btn:active {
   transform: translateY(0);
+}
+
+/* Market Analysis Button */
+.market-analysis-btn {
+  width: 100%;
+  background: linear-gradient(135deg, rgba(79, 70, 229, 0.15) 0%, rgba(124, 58, 237, 0.15) 100%);
+  border: 1px solid rgba(167, 139, 250, 0.3);
+  border-radius: var(--radius-xl);
+  padding: var(--spacing-lg);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-bottom: var(--spacing-lg);
+}
+
+.market-analysis-btn:hover {
+  background: linear-gradient(135deg, rgba(79, 70, 229, 0.25) 0%, rgba(124, 58, 237, 0.25) 100%);
+  border-color: var(--color-primary);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(167, 139, 250, 0.2);
+}
+
+.market-analysis-btn:active {
+  transform: translateY(0);
+}
+
+.btn-icon {
+  width: 40px;
+  height: 40px;
+  background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%);
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: white;
+}
+
+.btn-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+}
+
+.btn-title {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+}
+
+.btn-subtitle {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.btn-arrow {
+  color: var(--color-primary);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
 }
 </style>
