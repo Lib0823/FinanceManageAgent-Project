@@ -1,12 +1,26 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+import { Toast } from 'vant'
 import AppHeader from '@/components/common/AppHeader.vue'
 import { mockSettings } from '@/services/mockData'
+import { userApi } from '@/services/api'
 
 const router = useRouter()
+const authStore = useAuthStore()
 
 const settings = ref(mockSettings)
+const loading = ref(false)
+const errorMessage = ref('')
+
+// Trading configuration from API
+const tradeConfig = ref({
+  orderAmount: 1000000,
+  maxHoldings: 10,
+  orderType: 'market',
+  isActive: false
+})
 
 const assetItems = ref([
   { key: 'stocks_overseas', label: '주식 (해외)', icon: '📈' },
@@ -37,18 +51,95 @@ const handleDragEnd = () => {
   dragOverIndex.value = null
 }
 
-const handleSave = () => {
-  console.log('Save settings:', settings.value)
-  console.log('Asset order:', assetItems.value)
-  router.back()
-}
-
-const handleWithdraw = () => {
-  if (confirm('정말 회원 탈퇴하시겠습니까?')) {
-    localStorage.removeItem('accessToken')
-    router.push('/welcome')
+// Load trading configuration from API
+const loadTradeConfig = async () => {
+  try {
+    loading.value = true
+    const response = await userApi.getTradeConfig()
+    if (response.data) {
+      tradeConfig.value = response.data
+    }
+  } catch (error) {
+    console.error('Failed to load trade config:', error)
+    errorMessage.value = '거래 설정을 불러오는데 실패했습니다'
+  } finally {
+    loading.value = false
   }
 }
+
+const handleSave = async () => {
+  try {
+    loading.value = true
+    errorMessage.value = ''
+
+    // Save trading configuration to API
+    await userApi.updateTradeConfig(tradeConfig.value)
+
+    // Save UI preferences to localStorage
+    localStorage.setItem('uiSettings', JSON.stringify({
+      darkMode: settings.value.darkMode,
+      autoLogin: settings.value.autoLogin,
+      notifications: settings.value.notifications,
+      assetOrder: assetItems.value
+    }))
+
+    alert('설정이 저장되었습니다')
+    router.back()
+  } catch (error) {
+    console.error('Failed to save settings:', error)
+    errorMessage.value = error.response?.data?.message || '설정 저장에 실패했습니다'
+    alert(errorMessage.value)
+  } finally {
+    loading.value = false
+  }
+}
+
+const handleLogout = async () => {
+  try {
+    await authStore.logout()
+    Toast.success('로그아웃되었습니다')
+    router.push('/login')
+  } catch (error) {
+    console.error('Logout failed:', error)
+    Toast.fail('로그아웃에 실패했습니다')
+  }
+}
+
+const handleWithdraw = async () => {
+  if (!confirm('정말 회원 탈퇴하시겠습니까?\n\n모든 데이터가 삭제되며 복구할 수 없습니다.')) {
+    return
+  }
+
+  try {
+    loading.value = true
+    await userApi.deleteAccount()
+
+    // 로컬 저장소 클리어
+    authStore.clearAuthData()
+
+    Toast.success('회원 탈퇴가 완료되었습니다')
+    router.push('/welcome')
+  } catch (error) {
+    console.error('Account deletion failed:', error)
+    Toast.fail(error.response?.data?.message || '회원 탈퇴에 실패했습니다')
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(() => {
+  loadTradeConfig()
+
+  // Load UI preferences from localStorage
+  const savedUiSettings = localStorage.getItem('uiSettings')
+  if (savedUiSettings) {
+    const uiSettings = JSON.parse(savedUiSettings)
+    if (uiSettings.darkMode !== undefined) settings.value.darkMode = uiSettings.darkMode
+    if (uiSettings.autoLogin !== undefined) settings.value.autoLogin = uiSettings.autoLogin
+    if (uiSettings.notifications) settings.value.notifications = uiSettings.notifications
+    if (uiSettings.assetOrder) assetItems.value = uiSettings.assetOrder
+  }
+})
 </script>
 
 <template>
@@ -133,6 +224,93 @@ const handleWithdraw = () => {
         </div>
       </section>
 
+      <!-- Trading Configuration -->
+      <section class="section card">
+        <h3 class="section-title">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          거래 설정
+        </h3>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <div class="setting-icon-wrapper">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path d="M12 2V6M12 18V22M4.93 4.93L7.76 7.76M16.24 16.24L19.07 19.07M2 12H6M18 12H22M4.93 19.07L7.76 16.24M16.24 7.76L19.07 4.93" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <span class="setting-name">자동 거래 활성화</span>
+          </div>
+          <label class="toggle-wrapper">
+            <input type="checkbox" v-model="tradeConfig.isActive" />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="setting-divider"></div>
+
+        <div class="setting-row vertical">
+          <div class="setting-label">
+            <div class="setting-icon-wrapper">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path d="M12 1V23M17 5H9.5C8.57174 5 7.6815 5.36875 7.02513 6.02513C6.36875 6.6815 6 7.57174 6 8.5C6 9.42826 6.36875 10.3185 7.02513 10.9749C7.6815 11.6313 8.57174 12 9.5 12H14.5C15.4283 12 16.3185 12.3687 16.9749 13.0251C17.6313 13.6815 18 14.5717 18 15.5C18 16.4283 17.6313 17.3185 16.9749 17.9749C16.3185 18.6313 15.4283 19 14.5 19H6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <span class="setting-name">주문 금액</span>
+          </div>
+          <input
+            type="number"
+            v-model.number="tradeConfig.orderAmount"
+            class="setting-input"
+            placeholder="주문 금액 (원)"
+            min="0"
+            step="10000"
+          />
+        </div>
+
+        <div class="setting-divider"></div>
+
+        <div class="setting-row vertical">
+          <div class="setting-label">
+            <div class="setting-icon-wrapper">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path d="M9 11L12 14L22 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M21 12V19C21 19.5304 20.7893 20.0391 20.4142 20.4142C20.0391 20.7893 19.5304 21 19 21H5C4.46957 21 3.96086 20.7893 3.58579 20.4142C3.21071 20.0391 3 19.5304 3 19V5C3 4.46957 3.21071 3.96086 3.58579 3.58579C3.96086 3.21071 4.46957 3 5 3H16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <span class="setting-name">최대 보유 종목수</span>
+          </div>
+          <input
+            type="number"
+            v-model.number="tradeConfig.maxHoldings"
+            class="setting-input"
+            placeholder="최대 보유 종목수"
+            min="1"
+            max="50"
+          />
+        </div>
+
+        <div class="setting-divider"></div>
+
+        <div class="setting-row vertical">
+          <div class="setting-label">
+            <div class="setting-icon-wrapper">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path d="M16 21V5C16 4.46957 15.7893 3.96086 15.4142 3.58579C15.0391 3.21071 14.5304 3 14 3H10C9.46957 3 8.96086 3.21071 8.58579 3.58579C8.21071 3.96086 8 4.46957 8 5V21M3 12H21M3 7H8M3 17H8M16 7H21M16 17H21" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <span class="setting-name">주문 유형</span>
+          </div>
+          <select v-model="tradeConfig.orderType" class="setting-select">
+            <option value="market">시장가</option>
+            <option value="limit">지정가</option>
+          </select>
+        </div>
+      </section>
+
       <!-- Notifications -->
       <section class="section card">
         <h3 class="section-title">
@@ -193,6 +371,16 @@ const handleWithdraw = () => {
       <!-- Save Button -->
       <button class="btn btn-save" @click="handleSave">
         저장
+      </button>
+
+      <!-- Logout Button -->
+      <button class="logout-btn" @click="handleLogout">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+          <path d="M9 21H5C4.46957 21 3.96086 20.7893 3.58579 20.4142C3.21071 20.0391 3 19.5304 3 19V5C3 4.46957 3.21071 3.96086 3.58579 3.58579C3.96086 3.21071 4.46957 3 5 3H9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M16 17L21 12L16 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M21 12H9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        로그아웃
       </button>
 
       <!-- Withdraw -->
@@ -345,6 +533,12 @@ const handleWithdraw = () => {
   padding: var(--spacing-xs) 0;
 }
 
+.setting-row.vertical {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--spacing-sm);
+}
+
 .setting-label {
   display: flex;
   align-items: center;
@@ -379,6 +573,29 @@ const handleWithdraw = () => {
 .setting-desc {
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
+}
+
+.setting-input,
+.setting-select {
+  width: 100%;
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-base);
+  color: var(--color-text-primary);
+  transition: all 0.2s;
+}
+
+.setting-input:focus,
+.setting-select:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.setting-select {
+  cursor: pointer;
 }
 
 .setting-divider {
@@ -485,6 +702,34 @@ const handleWithdraw = () => {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
   font-weight: var(--font-weight-medium);
+}
+
+.logout-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-xs);
+  width: 100%;
+  padding: var(--spacing-md);
+  background: rgba(100, 116, 139, 0.1);
+  border: 1px solid rgba(100, 116, 139, 0.3);
+  border-radius: var(--radius-lg);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: #94A3B8;
+  cursor: pointer;
+  margin-top: var(--spacing-lg);
+  transition: all 0.2s;
+}
+
+.logout-btn:hover {
+  background: rgba(100, 116, 139, 0.15);
+  border-color: #64748B;
+  color: #CBD5E1;
+}
+
+.logout-btn:active {
+  transform: scale(0.98);
 }
 
 .withdraw-btn {

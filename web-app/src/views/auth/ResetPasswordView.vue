@@ -1,36 +1,99 @@
 <script setup>
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { authApi } from '@/services/api'
+import { Toast } from 'vant'
 
 const router = useRouter()
 
-const existingInfo = ref({
-  id: 'testID',
-  password: '************',
-  lastChanged: '2024-06-12'
-})
-
-const newInfo = ref({
-  password: '',
+const form = ref({
+  username: '',
+  phone: '',
+  newPassword: '',
   passwordConfirm: ''
 })
 
-const verification = ref({
-  phone: '010-1234-5678',
-  authCode: ''
-})
+const isPhoneVerified = ref(false)
+const isResetting = ref(false)
 
 const handleSendAuthCode = () => {
-  console.log('Send auth code to:', verification.value.phone)
+  // 임시 우회: 휴대폰 인증 없이 진행
+  if (!form.value.phone) {
+    Toast.fail('핸드폰 번호를 입력해주세요')
+    return
+  }
+
+  Toast.success('개발 중 - 인증번호 자동 발송 완료')
+  isPhoneVerified.value = true
 }
 
 const handleVerifyCode = () => {
-  console.log('Verify code:', verification.value.authCode)
+  // 임시 우회: 인증 자동 완료
+  Toast.success('개발 중 - 인증 완료')
+  isPhoneVerified.value = true
 }
 
-const handleReset = () => {
-  console.log('Reset password')
-  router.push('/login')
+const handleReset = async () => {
+  // 유효성 검사
+  if (!form.value.username) {
+    Toast.fail('아이디를 입력해주세요')
+    return
+  }
+
+  if (!form.value.phone) {
+    Toast.fail('핸드폰 번호를 입력해주세요')
+    return
+  }
+
+  if (!isPhoneVerified.value) {
+    Toast.fail('휴대폰 인증을 완료해주세요')
+    return
+  }
+
+  if (!form.value.newPassword) {
+    Toast.fail('새 비밀번호를 입력해주세요')
+    return
+  }
+
+  if (form.value.newPassword.length < 8) {
+    Toast.fail('비밀번호는 8자 이상이어야 합니다')
+    return
+  }
+
+  if (form.value.newPassword !== form.value.passwordConfirm) {
+    Toast.fail('비밀번호가 일치하지 않습니다')
+    return
+  }
+
+  try {
+    isResetting.value = true
+
+    await authApi.resetPassword({
+      username: form.value.username,
+      phone: form.value.phone,
+      newPassword: form.value.newPassword,
+      passwordConfirm: form.value.passwordConfirm
+    })
+
+    Toast.success('비밀번호가 재설정되었습니다')
+
+    setTimeout(() => {
+      router.push('/login')
+    }, 1000)
+  } catch (error) {
+    console.error('Password reset error:', error)
+
+    // 에러 메시지 처리
+    if (error.response?.data?.message) {
+      Toast.fail(error.response.data.message)
+    } else if (error.response?.data?.error) {
+      Toast.fail(error.response.data.error)
+    } else {
+      Toast.fail('비밀번호 재설정 중 오류가 발생했습니다')
+    }
+  } finally {
+    isResetting.value = false
+  }
 }
 </script>
 
@@ -48,42 +111,37 @@ const handleReset = () => {
 
       <!-- Form -->
       <div class="form">
-        <h3 class="card-title">내 정보</h3>
-        <!-- Existing Info -->
+        <!-- User Identification -->
+        <h3 class="card-title">사용자 정보</h3>
         <div class="info-card">
-          <div class="info-row">
-            <span class="info-label">아이디</span>
-            <span class="info-value">{{ existingInfo.id }}</span>
-          </div>
-
-          <div class="info-row">
-            <span class="info-label">비밀번호</span>
-            <span class="info-value">{{ existingInfo.password }}</span>
-          </div>
-
-          <div class="info-row">
-            <span class="info-label">마지막 변경일</span>
-            <span class="info-value">{{ existingInfo.lastChanged }}</span>
+          <div class="form-group">
+            <label class="label">아이디</label>
+            <input
+              v-model="form.username"
+              type="text"
+              class="input"
+              placeholder="Username"
+            />
           </div>
         </div>
 
-        <!-- New Info -->
-        <h3 class="card-title">변경 정보</h3>
+        <!-- New Password -->
+        <h3 class="card-title">새 비밀번호</h3>
         <div class="info-card">
           <div class="form-group">
-            <label class="label">변경 비밀번호</label>
+            <label class="label">새 비밀번호</label>
             <input
-              v-model="newInfo.password"
+              v-model="form.newPassword"
               type="password"
               class="input"
-              placeholder="New Password"
+              placeholder="New Password (8자 이상)"
             />
           </div>
 
           <div class="form-group">
             <label class="label">비밀번호 확인</label>
             <input
-              v-model="newInfo.passwordConfirm"
+              v-model="form.passwordConfirm"
               type="password"
               class="input"
               placeholder="Password Check"
@@ -99,32 +157,26 @@ const handleReset = () => {
             <label class="label">휴대폰 번호</label>
             <div class="input-with-btn">
               <input
-                v-model="verification.phone"
+                v-model="form.phone"
                 type="tel"
                 class="input"
-                readonly
+                placeholder="010-1234-5678"
               />
               <button class="inline-btn orange" @click="handleSendAuthCode">인증 번호 전송</button>
             </div>
           </div>
 
           <div class="form-group">
-            <label class="label">인증 번호</label>
-            <div class="input-with-btn">
-              <input
-                v-model="verification.authCode"
-                type="text"
-                class="input"
-                placeholder="Auth Number"
-              />
-              <button class="inline-btn" @click="handleVerifyCode">인증</button>
-            </div>
+            <label class="label">인증 번호 (개발 중 - 자동 인증)</label>
+            <button class="inline-btn" @click="handleVerifyCode" style="width: 100%;">
+              인증 완료
+            </button>
           </div>
         </div>
 
         <!-- Reset Button -->
-        <button class="btn btn-reset" @click="handleReset">
-          재설정
+        <button class="btn btn-reset" @click="handleReset" :disabled="isResetting">
+          {{ isResetting ? '처리 중...' : '재설정' }}
         </button>
       </div>
     </div>

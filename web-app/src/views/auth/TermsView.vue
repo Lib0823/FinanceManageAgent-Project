@@ -1,9 +1,19 @@
 <script setup>
+import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
 
+const termsAgreed = ref(false)
+const privacyAgreed = ref(false)
+
 const handleAgree = () => {
+  // 필수 약관 동의 확인
+  if (!termsAgreed.value || !privacyAgreed.value) {
+    alert('모든 필수 약관에 동의해주세요')
+    return
+  }
+
   localStorage.setItem('accessToken', 'mock-token')
   router.push('/home')
 }
@@ -56,6 +66,23 @@ const handleSendEmail = () => {
           <p>
             <strong>서비스 제한:</strong> 시스템 점검, 증권사 API 장애, 시장 휴장일 등의 사유로 서비스가 일시 중단될 수 있으며, 이로 인한 손해에 대해 회사는 책임지지 않습니다.
           </p>
+        </div>
+
+        <!-- 약관 동의 체크박스 -->
+        <div class="agreement-section">
+          <label class="agreement-checkbox">
+            <input type="checkbox" v-model="termsAgreed" />
+            <span class="checkbox-text">
+              <span class="required">[필수]</span> 서비스 이용약관에 동의합니다
+            </span>
+          </label>
+
+          <label class="agreement-checkbox">
+            <input type="checkbox" v-model="privacyAgreed" />
+            <span class="checkbox-text">
+              <span class="required">[필수]</span> 개인정보 수집 및 이용에 동의합니다
+            </span>
+          </label>
         </div>
       </div>
 
@@ -205,5 +232,48 @@ const handleSendEmail = () => {
 .link-btn.agree {
   color: var(--color-primary);
   font-weight: var(--font-weight-semibold);
+}
+
+.agreement-section {
+  margin-top: var(--spacing-2xl);
+  padding-top: var(--spacing-lg);
+  border-top: 1px solid var(--color-border-light);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.agreement-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-sm);
+  cursor: pointer;
+  padding: var(--spacing-sm);
+  border-radius: var(--radius-md);
+  transition: background 0.2s;
+}
+
+.agreement-checkbox:hover {
+  background: var(--color-bg-secondary);
+}
+
+.agreement-checkbox input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+
+.checkbox-text {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  line-height: 1.5;
+}
+
+.required {
+  color: var(--color-primary);
+  font-weight: var(--font-weight-semibold);
+  margin-right: var(--spacing-xs);
 }
 </style>

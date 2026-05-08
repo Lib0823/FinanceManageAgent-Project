@@ -1,11 +1,16 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+import { authApi } from '@/services/api'
+import { Toast } from 'vant'
 
 const router = useRouter()
+const authStore = useAuthStore()
 
 const stockInvestment = ref(true)
 const coinInvestment = ref(false)
+const isRegistering = ref(false)
 
 const brokerForm = ref({
   accountNumber: '',
@@ -13,13 +18,81 @@ const brokerForm = ref({
   appSecret: ''
 })
 
+// Step 1 데이터 확인
+onMounted(() => {
+  if (!authStore.hasStep1Data()) {
+    Toast.fail('기본 정보를 먼저 입력해주세요')
+    router.push('/register')
+  }
+})
+
 const handleGetAppKey = () => {
   window.open('https://apiportal.koreainvestment.com', '_blank')
 }
 
-const handleRegister = () => {
-  // Register and redirect to terms
-  router.push('/terms')
+const handleRegister = async () => {
+  // KIS 계좌 정보 검증
+  if (stockInvestment.value) {
+    if (!brokerForm.value.accountNumber || !brokerForm.value.appKey || !brokerForm.value.appSecret) {
+      Toast.fail('KIS 계좌 정보를 모두 입력해주세요')
+      return
+    }
+  }
+
+  try {
+    isRegistering.value = true
+
+    // Step 1 데이터 가져오기
+    const step1Data = authStore.registrationData.step1
+
+    // 회원가입 요청 데이터 생성
+    const registrationData = {
+      username: step1Data.id,
+      password: step1Data.password,
+      passwordConfirm: step1Data.passwordConfirm,
+      email: step1Data.email || null,
+      name: step1Data.name,
+      phone: step1Data.phone,
+      birthDate: step1Data.birthDate,
+      kisAccount: stockInvestment.value ? {
+        accountNumber: brokerForm.value.accountNumber,
+        appKey: brokerForm.value.appKey,
+        appSecret: brokerForm.value.appSecret
+      } : null
+    }
+
+    // API 호출
+    const response = await authApi.register(registrationData)
+
+    Toast.success('회원가입이 완료되었습니다')
+
+    // 토큰 저장 (백엔드가 RegisterResponse에 토큰을 포함하지 않으므로 로그인 필요)
+    // 회원가입 후 바로 로그인할 수도 있지만, 약관 동의 후 로그인으로 진행
+    authStore.clearRegistrationData()
+
+    // 약관 페이지로 이동
+    router.push('/terms')
+  } catch (error) {
+    console.error('Registration error:', error)
+
+    // 에러 메시지 처리
+    if (error.response?.data?.message) {
+      Toast.fail(error.response.data.message)
+    } else if (error.response?.data?.error) {
+      Toast.fail(error.response.data.error)
+    } else {
+      Toast.fail('회원가입 중 오류가 발생했습니다')
+    }
+
+    // 중복 에러인 경우 Step 1로 돌아가기
+    if (error.response?.data?.code === 3001 || error.response?.data?.code === 3002) {
+      setTimeout(() => {
+        router.push('/register')
+      }, 1500)
+    }
+  } finally {
+    isRegistering.value = false
+  }
 }
 </script>
 
@@ -95,8 +168,8 @@ const handleRegister = () => {
         </div>
 
         <!-- Register Button -->
-        <button class="btn btn-register" @click="handleRegister">
-          회원가입
+        <button class="btn btn-register" @click="handleRegister" :disabled="isRegistering">
+          {{ isRegistering ? '처리 중...' : '회원가입' }}
         </button>
       </div>
     </div>

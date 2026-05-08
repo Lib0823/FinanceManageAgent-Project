@@ -1,20 +1,67 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+import { authApi } from '@/services/api'
 
 const router = useRouter()
+const authStore = useAuthStore()
 
 const form = ref({
-  id: '',
+  username: '',
   password: ''
 })
 
 const autoLogin = ref(true)
+const loading = ref(false)
+const errorMessage = ref('')
+
+// Load auto-login preference from localStorage
+onMounted(() => {
+  const savedUiSettings = localStorage.getItem('uiSettings')
+  if (savedUiSettings) {
+    const uiSettings = JSON.parse(savedUiSettings)
+    if (uiSettings.autoLogin !== undefined) {
+      autoLogin.value = uiSettings.autoLogin
+    }
+  }
+})
 
 const handleLogin = async () => {
-  // Mock login - in real app, call API
-  localStorage.setItem('accessToken', 'mock-token')
-  router.push('/home')
+  if (!form.value.username || !form.value.password) {
+    errorMessage.value = '아이디와 비밀번호를 입력해주세요'
+    return
+  }
+
+  loading.value = true
+  errorMessage.value = ''
+
+  try {
+    const response = await authApi.login({
+      username: form.value.username,
+      password: form.value.password
+    })
+
+    // Save auto-login preference
+    const uiSettings = JSON.parse(localStorage.getItem('uiSettings') || '{}')
+    uiSettings.autoLogin = autoLogin.value
+    localStorage.setItem('uiSettings', JSON.stringify(uiSettings))
+
+    // Use auth store to manage authentication state
+    authStore.setAuthData({
+      accessToken: response.data.accessToken,
+      refreshToken: response.data.refreshToken,
+      user: response.data.user
+    })
+
+    // Navigate to home
+    router.push('/home')
+  } catch (error) {
+    console.error('Login failed:', error)
+    errorMessage.value = error.response?.data?.message || '로그인에 실패했습니다'
+  } finally {
+    loading.value = false
+  }
 }
 
 const goToResetPassword = () => {
@@ -39,10 +86,11 @@ const goToResetPassword = () => {
         <div class="form-group">
           <label class="label">ID</label>
           <input
-            v-model="form.id"
+            v-model="form.username"
             type="text"
             class="input"
             placeholder="Input ID"
+            :disabled="loading"
           />
         </div>
 
@@ -53,11 +101,17 @@ const goToResetPassword = () => {
             type="password"
             class="input"
             placeholder="Input Password"
+            :disabled="loading"
+            @keyup.enter="handleLogin"
           />
         </div>
 
-        <button class="btn btn-login" @click="handleLogin">
-          로그인
+        <div v-if="errorMessage" class="error-message">
+          {{ errorMessage }}
+        </div>
+
+        <button class="btn btn-login" @click="handleLogin" :disabled="loading">
+          {{ loading ? '로그인 중...' : '로그인' }}
         </button>
 
         <div class="options">
@@ -164,6 +218,20 @@ const goToResetPassword = () => {
   border-bottom-color: var(--color-primary);
 }
 
+.input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.error-message {
+  padding: var(--spacing-md);
+  background: var(--color-error);
+  color: white;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  text-align: center;
+}
+
 .btn-login {
   width: 100%;
   padding: var(--spacing-lg);
@@ -177,8 +245,13 @@ const goToResetPassword = () => {
   margin-top: var(--spacing-lg);
 }
 
-.btn-login:hover {
+.btn-login:hover:not(:disabled) {
   background: var(--color-primary-dark);
+}
+
+.btn-login:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .options {

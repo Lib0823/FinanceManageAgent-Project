@@ -24,14 +24,66 @@ api.interceptors.request.use(
   }
 )
 
-// Response interceptor
+// Token refresh state
+let isRefreshing = false
+let refreshSubscribers = []
+
+// Response interceptor with automatic token refresh
 api.interceptors.response.use(
   (response) => response.data,
-  (error) => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem('accessToken')
-      window.location.href = '/login'
+  async (error) => {
+    const originalRequest = error.config
+
+    // 401 에러이고, 아직 재시도하지 않은 요청인 경우
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      originalRequest._retry = true
+
+      // 이미 refresh 중이면 대기
+      if (isRefreshing) {
+        return new Promise((resolve) => {
+          refreshSubscribers.push((token) => {
+            originalRequest.headers.Authorization = `Bearer ${token}`
+            resolve(api(originalRequest))
+          })
+        })
+      }
+
+      isRefreshing = true
+
+      try {
+        const refreshToken = localStorage.getItem('refreshToken')
+        if (!refreshToken) {
+          throw new Error('No refresh token')
+        }
+
+        // Refresh token으로 새 access token 요청
+        const response = await axios.post(`${API_BASE_URL}/auth/refresh`, {
+          refreshToken: refreshToken
+        })
+
+        const newAccessToken = response.data.data.accessToken
+
+        // 새 토큰 저장
+        localStorage.setItem('accessToken', newAccessToken)
+
+        // 대기 중인 요청들에 새 토큰 전달
+        refreshSubscribers.forEach((callback) => callback(newAccessToken))
+        refreshSubscribers = []
+
+        // 원래 요청 재시도
+        originalRequest.headers.Authorization = `Bearer ${newAccessToken}`
+        return api(originalRequest)
+      } catch (refreshError) {
+        // Refresh 실패 시 로그아웃
+        console.error('Token refresh failed:', refreshError)
+        localStorage.clear()
+        window.location.href = '/login'
+        return Promise.reject(refreshError)
+      } finally {
+        isRefreshing = false
+      }
     }
+
     return Promise.reject(error)
   }
 )
@@ -40,64 +92,61 @@ api.interceptors.response.use(
 export const authApi = {
   login: (credentials) => api.post('/auth/login', credentials),
   register: (userData) => api.post('/auth/register', userData),
-  logout: () => api.post('/auth/logout'),
   resetPassword: (data) => api.post('/auth/reset-password', data),
-  verifyPhone: (phone) => api.post('/auth/verify-phone', { phone }),
-  checkDuplicate: (id) => api.get(`/auth/check-duplicate/${id}`)
+  checkUsername: (username) => api.get('/auth/check-username', { params: { username } }),
+  checkEmail: (email) => api.get('/auth/check-email', { params: { email } }),
+  refreshToken: (refreshToken) => api.post('/auth/refresh', { refreshToken }),
+  logout: (refreshToken) => api.post('/auth/logout', { refreshToken })
 }
 
 // User API
 export const userApi = {
-  getProfile: () => api.get('/user/profile'),
-  updateProfile: (data) => api.put('/user/profile', data),
-  getSettings: () => api.get('/user/settings'),
-  updateSettings: (data) => api.put('/user/settings', data)
+  getTradeConfig: () => api.get('/users/trade-config'),
+  updateTradeConfig: (data) => api.put('/users/trade-config', data),
+  deleteAccount: () => api.delete('/users/me')
 }
 
 // Asset API
 export const assetApi = {
-  getSummary: () => api.get('/assets/summary'),
-  getDetail: (type) => api.get(`/assets/detail/${type}`),
-  getStocks: () => api.get('/assets/stocks'),
-  getBonds: () => api.get('/assets/bonds'),
-  getCoins: () => api.get('/assets/coins'),
-  getCash: () => api.get('/assets/cash')
-}
-
-// Stock API
-export const stockApi = {
-  getList: (params) => api.get('/stocks', { params }),
-  getDetail: (symbol) => api.get(`/stocks/${symbol}`),
-  getPrice: (symbol) => api.get(`/stocks/${symbol}/price`),
-  getChart: (symbol, period) => api.get(`/stocks/${symbol}/chart`, { params: { period } }),
-  search: (query) => api.get('/stocks/search', { params: { q: query } })
-}
-
-// Company API
-export const companyApi = {
-  getInfo: (symbol) => api.get(`/companies/${symbol}`),
-  getFinancials: (symbol) => api.get(`/companies/${symbol}/financials`),
-  getDisclosures: (symbol) => api.get(`/companies/${symbol}/disclosures`),
-  getAiAnalysis: (symbol) => api.get(`/companies/${symbol}/ai-analysis`)
+  getHoldings: () => api.get('/assets/holdings'),
+  getBalance: () => api.get('/assets/balance')
 }
 
 // Trading API
 export const tradingApi = {
-  getOrders: () => api.get('/trading/orders'),
-  getPendingOrders: () => api.get('/trading/orders/pending'),
-  getHistory: (params) => api.get('/trading/history', { params }),
-  placeOrder: (order) => api.post('/trading/orders', order),
-  cancelOrder: (orderId) => api.delete(`/trading/orders/${orderId}`)
+  buy: (order) => api.post('/trading/buy', order),
+  sell: (order) => api.post('/trading/sell', order),
+  getHistory: () => api.get('/trading/history')
 }
 
-// News API
+// ========== APIs below are not yet implemented in api-server ==========
+// TODO: Implement these endpoints in api-server
+
+// Stock API (Not implemented)
+// export const stockApi = {
+//   getList: (params) => api.get('/stocks', { params }),
+//   getDetail: (symbol) => api.get(`/stocks/${symbol}`),
+//   getPrice: (symbol) => api.get(`/stocks/${symbol}/price`),
+//   getChart: (symbol, period) => api.get(`/stocks/${symbol}/chart`, { params: { period } }),
+//   search: (query) => api.get('/stocks/search', { params: { q: query } })
+// }
+
+// Company API (Not implemented)
+// export const companyApi = {
+//   getInfo: (symbol) => api.get(`/companies/${symbol}`),
+//   getFinancials: (symbol) => api.get(`/companies/${symbol}/financials`),
+//   getDisclosures: (symbol) => api.get(`/companies/${symbol}/disclosures`),
+//   getAiAnalysis: (symbol) => api.get(`/companies/${symbol}/ai-analysis`)
+// }
+
+// News API (Handled by FastAPI ai-agent)
 export const newsApi = {
   getList: (params) => api.get('/news', { params }),
   getDetail: (id) => api.get(`/news/${id}`),
   getByDate: (date) => api.get('/news/by-date', { params: { date } })
 }
 
-// Market API
+// Market API (Handled by FastAPI ai-agent)
 export const marketApi = {
   getIndices: () => api.get('/market/indices'),
   getExchangeRates: () => api.get('/market/exchange-rates'),
@@ -105,7 +154,7 @@ export const marketApi = {
   getAiRecommendations: () => api.get('/market/ai-recommendations')
 }
 
-// AI Bot API
+// AI Bot API (Handled by FastAPI ai-agent)
 export const botApi = {
   getStatus: () => api.get('/bot/status'),
   getAnalysis: (symbol) => api.get(`/bot/analysis/${symbol}`),
