@@ -12,12 +12,12 @@ AI 주식 자동매매 시스템 데이터베이스 스키마 문서
 
 ```
 database/
-├── mvp-schema.sql           # MVP 범위 DDL (최신)
-├── database-erd.sql         # (레거시) 기존 복잡한 스키마
-├── database-erd-diagram.md  # ERD 다이어그램 문서
-├── database-erd-summary.md  # 요약 문서
+├── mvp-schema.sql           # MVP 범위 DDL (참고용 - Liquibase 사용)
+├── product-schema.sql       # 프로덕션 범위 DDL (참고용 - Liquibase 사용)
 └── README.md                # 이 파일
 ```
+
+**참고**: 실제 스키마 관리는 Liquibase를 사용합니다. (`api-server/src/main/resources/db/changelog/`)
 
 ## 테이블 목록
 
@@ -134,10 +134,10 @@ Liquibase는 자동으로 2개의 메타데이터 테이블을 생성합니다:
 - `databasechangelog`: 실행된 changeset 이력
 - `databasechangeloglock`: 동시 실행 방지 락
 
-### 참고: 레거시 파일
+### 참고: SQL 파일
 
-- `database/mvp-schema.sql`: 참고용 SQL 스키마 (실행하지 마세요!)
-- Liquibase로 완전히 대체되었습니다.
+- `mvp-schema.sql` / `product-schema.sql`: 참고용 SQL 스키마 (실행하지 마세요!)
+- **실제 스키마는 Liquibase로 관리됩니다.** 수동 SQL 실행 대신 changelog 파일을 수정하세요.
 
 ## 인덱스 전략
 

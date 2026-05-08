@@ -1,16 +1,70 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AppHeader from '@/components/common/AppHeader.vue'
 import InvestmentTabs from '@/components/common/InvestmentTabs.vue'
-import { mockTradingOrders, mockTradingHistory, mockTransactionSummary } from '@/services/mockData'
+import { tradingApi } from '@/services/api'
 
 const router = useRouter()
 
 const tabs = ref({ main: 'stocks', sub: 'domestic' })
-const orders = ref(mockTradingOrders)
-const history = ref(mockTradingHistory)
-const summary = ref(mockTransactionSummary)
+const loading = ref(false)
+const errorMessage = ref('')
+
+// 거래 내역 데이터 (API에서 가져옴)
+const history = ref([])
+
+// 요약 데이터
+const summary = ref({
+  totalBuy: 0,
+  totalSell: 0,
+  totalProfit: 0,
+  count: 0
+})
+
+// Load trade history
+const loadHistory = async () => {
+  try {
+    loading.value = true
+    const response = await tradingApi.getHistory()
+
+    if (response.data) {
+      // TradeHistory 엔티티를 UI 형식으로 변환
+      history.value = response.data.map(trade => ({
+        id: trade.id,
+        symbol: trade.stockCode,
+        name: trade.stockName,
+        type: trade.orderType.toLowerCase(),  // BUY -> buy, SELL -> sell
+        quantity: trade.quantity,
+        price: trade.executedPrice || trade.orderPrice,
+        amount: (trade.executedPrice || trade.orderPrice) * trade.quantity,
+        date: new Date(trade.orderedAt).toLocaleDateString('ko-KR'),
+        time: new Date(trade.orderedAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }),
+        status: trade.orderStatus  // PENDING, COMPLETED 등
+      }))
+
+      // 요약 데이터 계산
+      summary.value.count = history.value.length
+      summary.value.totalBuy = history.value
+        .filter(t => t.type === 'buy')
+        .reduce((sum, t) => sum + t.amount, 0)
+      summary.value.totalSell = history.value
+        .filter(t => t.type === 'sell')
+        .reduce((sum, t) => sum + t.amount, 0)
+      summary.value.totalProfit = summary.value.totalSell - summary.value.totalBuy
+    }
+  } catch (error) {
+    console.error('Failed to load trade history:', error)
+    errorMessage.value = '거래 내역을 불러오는데 실패했습니다'
+  } finally {
+    loading.value = false
+  }
+}
+
+// 컴포넌트 마운트 시 데이터 로드
+onMounted(() => {
+  loadHistory()
+})
 
 const goToTrading = (order) => {
   router.push(`/trading/${order.symbol}`)

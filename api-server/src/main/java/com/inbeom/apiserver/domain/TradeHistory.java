@@ -24,6 +24,9 @@ public class TradeHistory {
     @JoinColumn(name = "user_id", nullable = false)
     private User user;
 
+    @Column(name = "order_number", length = 50)
+    private String orderNumber;
+
     @Column(name = "stock_code", nullable = false, length = 10)
     private String stockCode;
 
@@ -33,19 +36,52 @@ public class TradeHistory {
     @Column(name = "order_type", nullable = false, length = 10)
     private String orderType;
 
+    @Column(name = "order_status", nullable = false, length = 20)
+    private String orderStatus = "PENDING";
+
     @Column(nullable = false)
     private Integer quantity;
 
-    @Column(nullable = false, precision = 12, scale = 2)
-    private BigDecimal price;
+    @Column(name = "order_price", nullable = false, precision = 12, scale = 2)
+    private BigDecimal orderPrice;
 
-    @Column(name = "executed_at", nullable = false)
+    @Column(name = "executed_price", precision = 12, scale = 2)
+    private BigDecimal executedPrice;
+
+    @Column(name = "executed_quantity")
+    private Integer executedQuantity;
+
+    @Column(name = "ordered_at", nullable = false)
+    private LocalDateTime orderedAt;
+
+    @Column(name = "executed_at")
     private LocalDateTime executedAt;
-
-    @Column(name = "kis_order_no", length = 50)
-    private String kisOrderNo;
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
+
+    /**
+     * Update order status to EXECUTED
+     */
+    public void markAsExecuted(BigDecimal executedPrice, Integer executedQuantity) {
+        this.orderStatus = "EXECUTED";
+        this.executedPrice = executedPrice;
+        this.executedQuantity = executedQuantity;
+        this.executedAt = LocalDateTime.now();
+    }
+
+    /**
+     * Update order status to CANCELLED
+     */
+    public void markAsCancelled() {
+        this.orderStatus = "CANCELLED";
+    }
+
+    /**
+     * Update order status to FAILED
+     */
+    public void markAsFailed() {
+        this.orderStatus = "FAILED";
+    }
 }

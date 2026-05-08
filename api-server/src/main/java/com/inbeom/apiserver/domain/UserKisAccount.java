@@ -27,6 +27,9 @@ public class UserKisAccount {
     @Column(name = "account_number", nullable = false, unique = true, length = 50)
     private String accountNumber;
 
+    @Column(name = "account_product_code", nullable = false, length = 10)
+    private String accountProductCode = "01";
+
     @Column(name = "app_key", nullable = false, length = 255)
     private String appKey;
 

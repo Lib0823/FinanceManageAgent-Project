@@ -29,4 +29,8 @@ public interface TradeHistoryRepository extends JpaRepository<TradeHistory, Long
 
     @Query("SELECT DISTINCT th.stockCode FROM TradeHistory th WHERE th.user = :user AND th.orderType = 'buy'")
     List<String> findCurrentHoldingStockCodes(@Param("user") User user);
+
+    List<TradeHistory> findByUserIdOrderByOrderedAtDesc(Long userId);
+
+    void deleteByUserId(Long userId);
 }

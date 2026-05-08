@@ -1,32 +1,30 @@
 <script setup>
 import { ref, computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '@/components/common/AppHeader.vue'
-import { mockTradingOrders } from '@/services/mockData'
+import { tradingApi } from '@/services/api'
 
 const route = useRoute()
+const router = useRouter()
 
-const symbol = ref(route.params.symbol || 'AMZN')
+const symbol = ref(route.params.symbol || '005930')  // Default to Samsung Electronics
+const stockName = ref('삼성전자')  // Stock name
 const activeTab = ref('buy')
-
-// 현재 종목에 해당하는 주문만 필터링
-const filteredOrders = computed(() => ({
-  pending: mockTradingOrders.pending.filter(order => order.symbol === symbol.value),
-  reserved: mockTradingOrders.reserved.filter(order => order.symbol === symbol.value)
-}))
+const loading = ref(false)
+const errorMessage = ref('')
 
 const orderForm = ref({
   type: 'market',
-  time: '22:30 ~ 05:00',
-  quantity: '50주',
+  time: '09:00 ~ 15:30',
+  quantity: 1,
   maxQuantity: 100,
-  price: '50,000원',
-  maxPrice: 100000,
-  totalAmount: 50000
+  price: 71500,
+  maxPrice: 1000000,
+  totalAmount: 71500
 })
 
 const priceList = [
-  900000, 800000, 700000, 600000, 500000, 400000, 300000, 200000, 100000, 50000
+  90000, 85000, 80000, 75000, 71500, 70000, 65000, 60000, 55000, 50000
 ]
 
 const formatNumber = (num) => {
@@ -34,17 +32,50 @@ const formatNumber = (num) => {
 }
 
 const selectPrice = (price) => {
-  orderForm.value.price = `${formatNumber(price)}원`
-  orderForm.value.totalAmount = price * parseInt(orderForm.value.quantity)
+  orderForm.value.price = price
+  orderForm.value.totalAmount = price * orderForm.value.quantity
 }
 
-const placeOrder = () => {
-  console.log('Place order:', {
-    symbol: symbol.value,
-    type: activeTab.value,
-    ...orderForm.value
-  })
+const placeOrder = async () => {
+  if (loading.value) return
+
+  try {
+    loading.value = true
+    errorMessage.value = ''
+
+    const orderData = {
+      stockCode: symbol.value,
+      stockName: stockName.value,
+      quantity: parseInt(orderForm.value.quantity),
+      price: orderForm.value.price
+    }
+
+    let response
+    if (activeTab.value === 'buy') {
+      response = await tradingApi.buy(orderData)
+    } else {
+      response = await tradingApi.sell(orderData)
+    }
+
+    // Success
+    alert(`${activeTab.value === 'buy' ? '매수' : '매도'} 주문이 완료되었습니다.`)
+
+    // Redirect to transactions page
+    router.push('/transactions')
+  } catch (error) {
+    console.error('Order failed:', error)
+    errorMessage.value = error.response?.data?.message || '주문 실행에 실패했습니다'
+    alert(errorMessage.value)
+  } finally {
+    loading.value = false
+  }
 }
+
+// Mock orders for display (실제로는 API에서 가져와야 하지만 MVP에서는 생략)
+const filteredOrders = computed(() => ({
+  pending: [],
+  reserved: []
+}))
 </script>
 
 <template>

@@ -3,42 +3,20 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import AppHeader from '@/components/common/AppHeader.vue'
 import AssetTabs from '@/components/common/AssetTabs.vue'
-import { mockStockDetail, mockStocks } from '@/services/mockData'
+import { assetApi } from '@/services/api'
+import { mockStocks } from '@/services/mockData'
 
 const router = useRouter()
 const route = useRoute()
 
-const tabs = ref({ main: 'stocks', sub: 'overseas' })
-const stockDetail = ref(mockStockDetail)
+const tabs = ref({ main: 'stocks', sub: 'domestic' })
+const loading = ref(false)
+const errorMessage = ref('')
 
-// 국내/해외 주식 데이터 분리
-const domesticStocks = ref([
-  {
-    symbol: '005930',
-    name: '삼성전자',
-    nameEn: 'Samsung Electronics',
-    currentPrice: 71500,
-    purchasePrice: 680000,
-    profit: 15000,
-    profitPercent: 22,
-    avgPrice: 68000,
-    quantity: 10,
-    logo: '' // 임시로 빈 값
-  },
-  {
-    symbol: '035720',
-    name: '카카오',
-    nameEn: 'Kakao',
-    currentPrice: 52300,
-    purchasePrice: 470700,
-    profit: 8200,
-    profitPercent: 18,
-    avgPrice: 50000,
-    quantity: 9,
-    logo: '' // 임시로 빈 값
-  }
-])
+// 국내 주식 데이터 (API에서 가져옴)
+const domesticStocks = ref([])
 
+// 해외 주식 데이터 (Mock - KIS API는 국내 주식만 지원)
 const overseasStocks = ref(mockStocks)
 
 // 현재 선택된 탭에 따른 주식 데이터
@@ -46,28 +24,76 @@ const currentStocks = computed(() => {
   return tabs.value.sub === 'domestic' ? domesticStocks.value : overseasStocks.value
 })
 
-// URL 쿼리에서 초기 탭 설정
-onMounted(() => {
+// 현금 데이터 (API에서 가져옴)
+const cashDetail = ref({
+  krw: {
+    availableForOrder: 0,
+    availableForWithdrawal: 0
+  },
+  usd: {
+    amount: 0,
+    availableForOrder: 0,
+    availableForWithdrawal: 0,
+    exchangeRate: 1350
+  }
+})
+
+// Load holdings (보유 주식)
+const loadHoldings = async () => {
+  try {
+    loading.value = true
+    const response = await assetApi.getHoldings()
+
+    // KIS API 응답 구조에 맞춰 파싱
+    if (response.data?.output1) {
+      domesticStocks.value = response.data.output1.map(stock => ({
+        symbol: stock.pdno,  // 종목코드
+        name: stock.prdt_name,  // 종목명
+        nameEn: stock.prdt_name,
+        currentPrice: parseInt(stock.prpr),  // 현재가
+        quantity: parseInt(stock.hldg_qty),  // 보유수량
+        avgPrice: parseInt(stock.pchs_avg_pric),  // 평균매입가
+        purchasePrice: parseInt(stock.pchs_amt),  // 매입금액
+        profit: parseInt(stock.evlu_pfls_amt),  // 평가손익금액
+        profitPercent: parseFloat(stock.evlu_pfls_rt),  // 평가손익율
+        logo: ''
+      }))
+    }
+  } catch (error) {
+    console.error('Failed to load holdings:', error)
+    errorMessage.value = '보유 주식 정보를 불러오는데 실패했습니다'
+  } finally {
+    loading.value = false
+  }
+}
+
+// Load balance (잔고)
+const loadBalance = async () => {
+  try {
+    const response = await assetApi.getBalance()
+
+    // KIS API 응답 구조에 맞춰 파싱
+    if (response.data?.balance?.output2) {
+      const balanceData = response.data.balance.output2[0]
+      cashDetail.value.krw.availableForOrder = parseInt(balanceData.ord_psbl_cash || 0)  // 주문가능현금
+      cashDetail.value.krw.availableForWithdrawal = parseInt(balanceData.wdrw_psbl_tot_amt || 0)  // 출금가능금액
+    }
+  } catch (error) {
+    console.error('Failed to load balance:', error)
+  }
+}
+
+// URL 쿼리에서 초기 탭 설정 및 데이터 로드
+onMounted(async () => {
   if (route.query.main) {
     tabs.value.main = route.query.main
     if (route.query.sub) {
       tabs.value.sub = route.query.sub
     }
   }
-})
 
-// 현금 데이터
-const cashDetail = ref({
-  krw: {
-    availableForOrder: 15000000,
-    availableForWithdrawal: 12000000
-  },
-  usd: {
-    amount: 50000,
-    availableForOrder: 50000,
-    availableForWithdrawal: 45000,
-    exchangeRate: 1350
-  }
+  // Load data
+  await Promise.all([loadHoldings(), loadBalance()])
 })
 
 // USD를 원화로 환산
