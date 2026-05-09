@@ -12,6 +12,8 @@ public interface UserKisAccountRepository extends JpaRepository<UserKisAccount, 
 
     Optional<UserKisAccount> findByUser(User user);
 
+    Optional<UserKisAccount> findByUserId(Long userId);
+
     Optional<UserKisAccount> findByAccountNumber(String accountNumber);
 
     boolean existsByAccountNumber(String accountNumber);
