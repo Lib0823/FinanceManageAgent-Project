@@ -14,14 +14,6 @@ const settings = ref(mockSettings)
 const loading = ref(false)
 const errorMessage = ref('')
 
-// Trading configuration from API
-const tradeConfig = ref({
-  orderAmount: 1000000,
-  maxHoldings: 10,
-  orderType: 'market',
-  isActive: false
-})
-
 const assetItems = ref([
   { key: 'stocks_overseas', label: '주식 (해외)', icon: '📈' },
   { key: 'stocks_domestic', label: '주식 (국내)', icon: '🏠' },
@@ -51,17 +43,22 @@ const handleDragEnd = () => {
   dragOverIndex.value = null
 }
 
-// Load trading configuration from API
-const loadTradeConfig = async () => {
+const loadSettings = async () => {
   try {
     loading.value = true
-    const response = await userApi.getTradeConfig()
+    const response = await userApi.getSettings()
     if (response.data) {
-      tradeConfig.value = response.data
+      const settingsData = response.data
+      settings.value.darkMode = settingsData.darkMode
+      settings.value.autoLogin = settingsData.autoLogin
+      settings.value.notifications = settingsData.notifications
+      if (settingsData.assetOrder && Array.isArray(settingsData.assetOrder)) {
+        assetItems.value = settingsData.assetOrder
+      }
     }
   } catch (error) {
-    console.error('Failed to load trade config:', error)
-    errorMessage.value = '거래 설정을 불러오는데 실패했습니다'
+    console.error('Failed to load settings:', error)
+    errorMessage.value = '설정을 불러오는데 실패했습니다'
   } finally {
     loading.value = false
   }
@@ -72,23 +69,20 @@ const handleSave = async () => {
     loading.value = true
     errorMessage.value = ''
 
-    // Save trading configuration to API
-    await userApi.updateTradeConfig(tradeConfig.value)
-
-    // Save UI preferences to localStorage
-    localStorage.setItem('uiSettings', JSON.stringify({
+    // Save settings to API
+    await userApi.updateSettings({
       darkMode: settings.value.darkMode,
       autoLogin: settings.value.autoLogin,
       notifications: settings.value.notifications,
       assetOrder: assetItems.value
-    }))
+    })
 
-    alert('설정이 저장되었습니다')
+    Toast.success('설정이 저장되었습니다')
     router.back()
   } catch (error) {
     console.error('Failed to save settings:', error)
     errorMessage.value = error.response?.data?.message || '설정 저장에 실패했습니다'
-    alert(errorMessage.value)
+    Toast.fail(errorMessage.value)
   } finally {
     loading.value = false
   }
@@ -128,17 +122,7 @@ const handleWithdraw = async () => {
 }
 
 onMounted(() => {
-  loadTradeConfig()
-
-  // Load UI preferences from localStorage
-  const savedUiSettings = localStorage.getItem('uiSettings')
-  if (savedUiSettings) {
-    const uiSettings = JSON.parse(savedUiSettings)
-    if (uiSettings.darkMode !== undefined) settings.value.darkMode = uiSettings.darkMode
-    if (uiSettings.autoLogin !== undefined) settings.value.autoLogin = uiSettings.autoLogin
-    if (uiSettings.notifications) settings.value.notifications = uiSettings.notifications
-    if (uiSettings.assetOrder) assetItems.value = uiSettings.assetOrder
-  }
+  loadSettings()
 })
 </script>
 
@@ -221,93 +205,6 @@ onMounted(() => {
             <input type="checkbox" v-model="settings.autoLogin" />
             <span class="toggle-slider"></span>
           </label>
-        </div>
-      </section>
-
-      <!-- Trading Configuration -->
-      <section class="section card">
-        <h3 class="section-title">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-            <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-          거래 설정
-        </h3>
-
-        <div class="setting-row">
-          <div class="setting-label">
-            <div class="setting-icon-wrapper">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                <path d="M12 2V6M12 18V22M4.93 4.93L7.76 7.76M16.24 16.24L19.07 19.07M2 12H6M18 12H22M4.93 19.07L7.76 16.24M16.24 7.76L19.07 4.93" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </div>
-            <span class="setting-name">자동 거래 활성화</span>
-          </div>
-          <label class="toggle-wrapper">
-            <input type="checkbox" v-model="tradeConfig.isActive" />
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-
-        <div class="setting-divider"></div>
-
-        <div class="setting-row vertical">
-          <div class="setting-label">
-            <div class="setting-icon-wrapper">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                <path d="M12 1V23M17 5H9.5C8.57174 5 7.6815 5.36875 7.02513 6.02513C6.36875 6.6815 6 7.57174 6 8.5C6 9.42826 6.36875 10.3185 7.02513 10.9749C7.6815 11.6313 8.57174 12 9.5 12H14.5C15.4283 12 16.3185 12.3687 16.9749 13.0251C17.6313 13.6815 18 14.5717 18 15.5C18 16.4283 17.6313 17.3185 16.9749 17.9749C16.3185 18.6313 15.4283 19 14.5 19H6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </div>
-            <span class="setting-name">주문 금액</span>
-          </div>
-          <input
-            type="number"
-            v-model.number="tradeConfig.orderAmount"
-            class="setting-input"
-            placeholder="주문 금액 (원)"
-            min="0"
-            step="10000"
-          />
-        </div>
-
-        <div class="setting-divider"></div>
-
-        <div class="setting-row vertical">
-          <div class="setting-label">
-            <div class="setting-icon-wrapper">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                <path d="M9 11L12 14L22 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                <path d="M21 12V19C21 19.5304 20.7893 20.0391 20.4142 20.4142C20.0391 20.7893 19.5304 21 19 21H5C4.46957 21 3.96086 20.7893 3.58579 20.4142C3.21071 20.0391 3 19.5304 3 19V5C3 4.46957 3.21071 3.96086 3.58579 3.58579C3.96086 3.21071 4.46957 3 5 3H16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </div>
-            <span class="setting-name">최대 보유 종목수</span>
-          </div>
-          <input
-            type="number"
-            v-model.number="tradeConfig.maxHoldings"
-            class="setting-input"
-            placeholder="최대 보유 종목수"
-            min="1"
-            max="50"
-          />
-        </div>
-
-        <div class="setting-divider"></div>
-
-        <div class="setting-row vertical">
-          <div class="setting-label">
-            <div class="setting-icon-wrapper">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                <path d="M16 21V5C16 4.46957 15.7893 3.96086 15.4142 3.58579C15.0391 3.21071 14.5304 3 14 3H10C9.46957 3 8.96086 3.21071 8.58579 3.58579C8.21071 3.96086 8 4.46957 8 5V21M3 12H21M3 7H8M3 17H8M16 7H21M16 17H21" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </div>
-            <span class="setting-name">주문 유형</span>
-          </div>
-          <select v-model="tradeConfig.orderType" class="setting-select">
-            <option value="market">시장가</option>
-            <option value="limit">지정가</option>
-          </select>
         </div>
       </section>
 

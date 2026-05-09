@@ -101,8 +101,10 @@ export const authApi = {
 
 // User API
 export const userApi = {
-  getTradeConfig: () => api.get('/users/trade-config'),
-  updateTradeConfig: (data) => api.put('/users/trade-config', data),
+  getProfile: () => api.get('/users/me'),
+  updateProfile: (data) => api.put('/users/me', data),
+  getSettings: () => api.get('/users/settings'),
+  updateSettings: (data) => api.put('/users/settings', data),
   deleteAccount: () => api.delete('/users/me')
 }
 

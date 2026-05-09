@@ -1,13 +1,46 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { Toast } from 'vant'
 import AppHeader from '@/components/common/AppHeader.vue'
-import { mockUser } from '@/services/mockData'
+import { userApi } from '@/services/api'
 
 const router = useRouter()
 
-const user = ref(mockUser)
+const user = ref({
+  id: null,
+  username: '',
+  email: '',
+  name: '',
+  phone: '',
+  birthDate: null
+})
+
 const showBirthCalendar = ref(false)
+const loading = ref(false)
+
+// Load user profile
+const loadProfile = async () => {
+  try {
+    loading.value = true
+    const response = await userApi.getProfile()
+    if (response.data) {
+      user.value = {
+        id: response.data.id,
+        username: response.data.username,
+        email: response.data.email,
+        name: response.data.name,
+        phone: response.data.phone,
+        birthDate: response.data.birthDate
+      }
+    }
+  } catch (error) {
+    console.error('Failed to load profile:', error)
+    Toast.fail('프로필 정보를 불러오지 못했습니다')
+  } finally {
+    loading.value = false
+  }
+}
 
 const goToSettings = () => {
   router.push('/settings')
@@ -18,27 +51,54 @@ const goToResetPassword = () => {
 }
 
 const handleLogout = () => {
-  localStorage.removeItem('accessToken')
+  localStorage.clear()
   router.push('/welcome')
 }
 
-const handleSave = () => {
-  console.log('Save profile:', user.value)
-}
+const handleSave = async () => {
+  try {
+    // Validate required fields
+    if (!user.value.name || !user.value.email) {
+      Toast.fail('이름과 이메일은 필수입니다')
+      return
+    }
 
-const handleGetAppKey = () => {
-  window.open('https://apiportal.koreainvestment.com', '_blank')
-}
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(user.value.email)) {
+      Toast.fail('올바른 이메일 형식이 아닙니다')
+      return
+    }
 
-const handleAuthenticate = () => {
-  // TODO: 실제 인증 API 호출
-  console.log('인증 요청:', {
-    accountNumber: user.value.broker.accountNumber,
-    appKey: user.value.broker.appKey,
-    appSecret: user.value.broker.appSecret
-  })
-  // 임시 알림
-  alert('인증이 완료되었습니다.')
+    // Validate phone format (if provided)
+    if (user.value.phone) {
+      const phoneRegex = /^01[0-9]-?[0-9]{3,4}-?[0-9]{4}$/
+      if (!phoneRegex.test(user.value.phone)) {
+        Toast.fail('올바른 전화번호 형식이 아닙니다 (예: 010-1234-5678)')
+        return
+      }
+    }
+
+    loading.value = true
+
+    await userApi.updateProfile({
+      name: user.value.name,
+      email: user.value.email,
+      phone: user.value.phone || null,
+      birthDate: user.value.birthDate || null
+    })
+
+    Toast.success('프로필이 저장되었습니다')
+  } catch (error) {
+    console.error('Failed to save profile:', error)
+    if (error.response?.data?.message) {
+      Toast.fail(error.response.data.message)
+    } else {
+      Toast.fail('프로필 저장에 실패했습니다')
+    }
+  } finally {
+    loading.value = false
+  }
 }
 
 const openBirthPicker = () => {
@@ -46,17 +106,26 @@ const openBirthPicker = () => {
 }
 
 const confirmBirth = (value) => {
-  const date = new Date(value)
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  user.value.birth = `${year}.${month}.${day}`
+  user.value.birthDate = value
   showBirthCalendar.value = false
 }
 
 const closeBirthPicker = () => {
   showBirthCalendar.value = false
 }
+
+const formatBirthDate = (date) => {
+  if (!date) return '생년월일 선택'
+  const d = new Date(date)
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${year}.${month}.${day}`
+}
+
+onMounted(() => {
+  loadProfile()
+})
 </script>
 
 <template>
@@ -96,7 +165,7 @@ const closeBirthPicker = () => {
 
         <div class="info-row disabled">
           <span class="info-label">ID</span>
-          <input type="text" class="info-input" :value="user.id" disabled />
+          <input type="text" class="info-input" :value="user.username" disabled />
         </div>
 
         <div class="info-row disabled">
@@ -106,19 +175,42 @@ const closeBirthPicker = () => {
         </div>
 
         <div class="info-row">
-          <span class="info-label">Phone</span>
-          <input type="tel" class="info-input" v-model="user.phone" placeholder="전화번호 입력" />
+          <span class="info-label">이름 *</span>
+          <input
+            type="text"
+            class="info-input"
+            v-model="user.name"
+            placeholder="이름 입력"
+            :disabled="loading"
+          />
         </div>
 
         <div class="info-row">
-          <span class="info-label">Name</span>
-          <input type="text" class="info-input" v-model="user.name" placeholder="이름 입력" />
+          <span class="info-label">이메일 *</span>
+          <input
+            type="email"
+            class="info-input"
+            v-model="user.email"
+            placeholder="이메일 입력"
+            :disabled="loading"
+          />
         </div>
 
         <div class="info-row">
-          <span class="info-label">Birth</span>
-          <div class="info-input clickable" @click="openBirthPicker">
-            <span>{{ user.birth }}</span>
+          <span class="info-label">전화번호</span>
+          <input
+            type="tel"
+            class="info-input"
+            v-model="user.phone"
+            placeholder="010-1234-5678"
+            :disabled="loading"
+          />
+        </div>
+
+        <div class="info-row">
+          <span class="info-label">생년월일</span>
+          <div class="info-input clickable" @click="openBirthPicker" :class="{ disabled: loading }">
+            <span>{{ formatBirthDate(user.birthDate) }}</span>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
               <path d="M8 7V3M16 7V3M7 11H17M5 21H19C20.1046 21 21 20.1046 21 19V7C21 5.89543 20.1046 5 19 5H5C3.89543 5 3 5.89543 3 7V19C3 20.1046 3.89543 21 5 21Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
@@ -126,47 +218,9 @@ const closeBirthPicker = () => {
         </div>
       </section>
 
-      <!-- Broker Info Card -->
-      <section class="info-card broker">
-        <div class="broker-header">
-          <span class="broker-badge">증권 정보</span>
-          <span class="broker-sub">한국투자증권</span>
-        </div>
-
-        <div class="info-row">
-          <span class="info-label">계좌번호</span>
-          <input type="text" class="info-input" v-model="user.broker.accountNumber" placeholder="계좌번호 입력" />
-        </div>
-
-        <div class="info-row">
-          <span class="info-label">APP Key</span>
-          <input type="text" class="info-input" v-model="user.broker.appKey" placeholder="APP Key 입력" />
-        </div>
-
-        <div class="info-row">
-          <span class="info-label">APP Secret</span>
-          <input type="text" class="info-input" v-model="user.broker.appSecret" placeholder="APP Secret 입력" />
-        </div>
-
-        <div class="broker-buttons">
-          <button class="link-btn" @click="handleGetAppKey">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-              <path d="M10 6H6C4.89543 6 4 6.89543 4 8V18C4 19.1046 4.89543 20 6 20H16C17.1046 20 18 19.1046 18 18V14M14 4H20M20 4V10M20 4L10 14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-            발급받기
-          </button>
-          <button class="auth-btn" @click="handleAuthenticate">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-              <path d="M9 12L11 14L15 10M21 12C21 16.9706 16.9706 21 12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-            인증
-          </button>
-        </div>
-      </section>
-
       <!-- Save Button -->
-      <button class="btn btn-save" @click="handleSave">
-        저장
+      <button class="btn btn-save" @click="handleSave" :disabled="loading">
+        {{ loading ? '저장 중...' : '저장' }}
       </button>
     </div>
 
@@ -178,7 +232,7 @@ const closeBirthPicker = () => {
       v-model:show="showBirthCalendar"
       :min-date="new Date(1900, 0, 1)"
       :max-date="new Date()"
-      :default-date="new Date(user.birth.replace(/\./g, '-'))"
+      :default-date="user.birthDate ? new Date(user.birthDate) : new Date()"
       color="#F59E0B"
       :show-confirm="false"
       @confirm="confirmBirth"
@@ -334,9 +388,14 @@ const closeBirthPicker = () => {
   user-select: none;
 }
 
-.info-input.clickable:hover {
+.info-input.clickable:not(.disabled):hover {
   border-color: var(--color-primary);
   background: rgba(255, 255, 255, 0.08);
+}
+
+.info-input.clickable.disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .info-input.clickable svg {
@@ -366,92 +425,6 @@ const closeBirthPicker = () => {
   transform: scale(0.98);
 }
 
-.broker-header {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-  margin-bottom: var(--spacing-lg);
-  justify-content: center;
-  padding-bottom: var(--spacing-md);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.broker-badge {
-  padding: var(--spacing-xs) var(--spacing-lg);
-  background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%);
-  color: var(--color-text-inverse);
-  border-radius: var(--radius-full);
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-bold);
-  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
-}
-
-.broker-sub {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
-  font-weight: var(--font-weight-medium);
-}
-
-.broker-buttons {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--spacing-sm);
-  margin-top: var(--spacing-lg);
-}
-
-.link-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--spacing-xs);
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(245, 158, 11, 0.3);
-  border-radius: var(--radius-lg);
-  padding: var(--spacing-md);
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-primary);
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.link-btn:hover {
-  background: rgba(245, 158, 11, 0.1);
-  border-color: var(--color-primary);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.2);
-}
-
-.link-btn:active {
-  transform: translateY(0);
-}
-
-.auth-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--spacing-xs);
-  background: linear-gradient(135deg, #10B981 0%, #059669 100%);
-  border: none;
-  border-radius: var(--radius-lg);
-  padding: var(--spacing-md);
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  color: white;
-  cursor: pointer;
-  transition: all 0.2s;
-  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
-}
-
-.auth-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
-}
-
-.auth-btn:active {
-  transform: translateY(0);
-}
-
 .btn-save {
   width: 100%;
   padding: var(--spacing-lg);
@@ -466,13 +439,18 @@ const closeBirthPicker = () => {
   transition: all 0.2s;
 }
 
-.btn-save:hover {
+.btn-save:hover:not(:disabled) {
   transform: translateY(-2px);
   box-shadow: 0 6px 16px rgba(245, 158, 11, 0.4);
 }
 
-.btn-save:active {
+.btn-save:active:not(:disabled) {
   transform: translateY(0);
+}
+
+.btn-save:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .bottom-spacer {
