@@ -30,6 +30,11 @@ databaseChangeLog:
       file: classpath:db/changelog/mvp/v1.4-test-data.yaml
       context: mvp
 
+  # Phase 6: User Settings Table
+  - include:
+      file: classpath:db/changelog/mvp/v1.5-user-settings.yaml
+      context: mvp
+
   # ========================================
   # Product Context Changelogs (Future)
   # ========================================

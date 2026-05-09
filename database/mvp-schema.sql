@@ -95,6 +95,29 @@ COMMENT ON COLUMN user_trade_config.order_type IS '주문 유형 (market: 시장
 COMMENT ON COLUMN user_trade_config.is_active IS '자동매매 활성화 여부 (ON/OFF)';
 
 
+-- 사용자 UI 설정
+CREATE TABLE user_settings (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    asset_order JSONB DEFAULT '[{"key":"stocks_overseas","label":"주식 (해외)","icon":"📈"},{"key":"stocks_domestic","label":"주식 (국내)","icon":"🏠"},{"key":"coins","label":"코인","icon":"🪙"},{"key":"bonds","label":"채권","icon":"📜"}]',
+    dark_mode BOOLEAN NOT NULL DEFAULT FALSE,
+    auto_login BOOLEAN NOT NULL DEFAULT FALSE,
+    notifications JSONB DEFAULT '{"stocks":{"news":true,"trading":true},"coins":{"news":true,"trading":true}}',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id)
+);
+
+CREATE INDEX idx_user_settings_user ON user_settings(user_id);
+
+COMMENT ON TABLE user_settings IS '사용자별 UI 설정 정보';
+COMMENT ON COLUMN user_settings.user_id IS '사용자 ID (FK)';
+COMMENT ON COLUMN user_settings.asset_order IS '관심 자산 표시 순서 (드래그앤드롭)';
+COMMENT ON COLUMN user_settings.dark_mode IS '다크 모드 활성화 여부';
+COMMENT ON COLUMN user_settings.auto_login IS '자동 로그인 설정';
+COMMENT ON COLUMN user_settings.notifications IS '알림 설정 (주식/코인 뉴스/매매)';
+
+
 -- ============================================================
 -- 2. 종목 필터링 & 분석 데이터
 -- ============================================================

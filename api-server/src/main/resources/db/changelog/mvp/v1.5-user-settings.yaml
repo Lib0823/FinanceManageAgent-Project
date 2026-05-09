@@ -1,0 +1,98 @@
+databaseChangeLog:
+  - changeSet:
+      id: 1.5.1-create-user-settings-table
+      author: claude
+      context: mvp
+      changes:
+        - createTable:
+            tableName: user_settings
+            columns:
+              - column:
+                  name: id
+                  type: BIGSERIAL
+                  constraints:
+                    primaryKey: true
+              - column:
+                  name: user_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+                    unique: true
+                    foreignKeyName: fk_user_settings_user_id
+                    references: users(id)
+                    deleteCascade: true
+              - column:
+                  name: asset_order
+                  type: JSONB
+                  defaultValue: '[{"key":"stocks_overseas","label":"주식 (해외)","icon":"📈"},{"key":"stocks_domestic","label":"주식 (국내)","icon":"🏠"},{"key":"coins","label":"코인","icon":"🪙"},{"key":"bonds","label":"채권","icon":"📜"}]'
+              - column:
+                  name: dark_mode
+                  type: BOOLEAN
+                  defaultValueBoolean: false
+                  constraints:
+                    nullable: false
+              - column:
+                  name: auto_login
+                  type: BOOLEAN
+                  defaultValueBoolean: false
+                  constraints:
+                    nullable: false
+              - column:
+                  name: notifications
+                  type: JSONB
+                  defaultValue: '{"stocks":{"news":true,"trading":true},"coins":{"news":true,"trading":true}}'
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+
+        - createIndex:
+            indexName: idx_user_settings_user_id
+            tableName: user_settings
+            columns:
+              - column:
+                  name: user_id
+
+        - addForeignKeyConstraint:
+            baseTableName: user_settings
+            baseColumnNames: user_id
+            constraintName: fk_user_settings_user_id
+            referencedTableName: users
+            referencedColumnNames: id
+            onDelete: CASCADE
+
+      rollback:
+        - dropTable:
+            tableName: user_settings
+
+  - changeSet:
+      id: 1.5.2-add-user-settings-comments
+      author: claude
+      context: mvp
+      changes:
+        - sql:
+            sql: |
+              COMMENT ON TABLE user_settings IS '사용자별 UI 설정 정보';
+              COMMENT ON COLUMN user_settings.user_id IS '사용자 ID (FK)';
+              COMMENT ON COLUMN user_settings.asset_order IS '관심 자산 표시 순서 (드래그앤드롭)';
+              COMMENT ON COLUMN user_settings.dark_mode IS '다크 모드 활성화 여부';
+              COMMENT ON COLUMN user_settings.auto_login IS '자동 로그인 설정';
+              COMMENT ON COLUMN user_settings.notifications IS '알림 설정 (주식/코인 뉴스/매매)';
+
+      rollback:
+        - sql:
+            sql: |
+              COMMENT ON TABLE user_settings IS NULL;
+              COMMENT ON COLUMN user_settings.user_id IS NULL;
+              COMMENT ON COLUMN user_settings.asset_order IS NULL;
+              COMMENT ON COLUMN user_settings.dark_mode IS NULL;
+              COMMENT ON COLUMN user_settings.auto_login IS NULL;
+              COMMENT ON COLUMN user_settings.notifications IS NULL;
