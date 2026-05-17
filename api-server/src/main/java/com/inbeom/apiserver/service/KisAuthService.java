@@ -11,14 +11,13 @@ import org.jasypt.encryption.StringEncryptor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -59,8 +58,18 @@ public class KisAuthService {
         UserKisAccount kisAccount = kisAccountRepository.findById(kisAccountId)
                 .orElseThrow(() -> new KisAccountNotFoundException(kisAccountId));
 
-        String appKey = jasyptStringEncryptor.decrypt(kisAccount.getAppKey());
-        String appSecret = jasyptStringEncryptor.decrypt(kisAccount.getAppSecret());
+        // Try decryption, fallback to plain text if decryption fails (MVP workaround)
+        String appKey;
+        String appSecret;
+        try {
+            appKey = jasyptStringEncryptor.decrypt(kisAccount.getAppKey());
+            appSecret = jasyptStringEncryptor.decrypt(kisAccount.getAppSecret());
+            log.debug("Successfully decrypted KIS credentials for kis_account_id={}", kisAccountId);
+        } catch (Exception e) {
+            log.warn("Jasypt decryption failed for kis_account_id={}, using plain text (MVP mode)", kisAccountId);
+            appKey = kisAccount.getAppKey();
+            appSecret = kisAccount.getAppSecret();
+        }
 
         // 3. Issue KIS OAuth token
         String kisToken = requestKisOAuthToken(appKey, appSecret);
@@ -81,12 +90,13 @@ public class KisAuthService {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
 
-        MultiValueMap<String, String> body = new LinkedMultiValueMap<>();
-        body.add("grant_type", "client_credentials");
-        body.add("appkey", appKey);
-        body.add("appsecret", appSecret);
+        // KIS API requires JSON format, not form-data
+        Map<String, String> body = new HashMap<>();
+        body.put("grant_type", "client_credentials");
+        body.put("appkey", appKey);
+        body.put("appsecret", appSecret);
 
-        HttpEntity<MultiValueMap<String, String>> request = new HttpEntity<>(body, headers);
+        HttpEntity<Map<String, String>> request = new HttpEntity<>(body, headers);
 
         try {
             ResponseEntity<KisTokenResponse> response = restTemplate.postForEntity(url, request, KisTokenResponse.class);
@@ -122,8 +132,17 @@ public class KisAuthService {
         UserKisAccount kisAccount = kisAccountRepository.findById(kisAccountId)
                 .orElseThrow(() -> new KisAccountNotFoundException(kisAccountId));
 
-        String appKey = jasyptStringEncryptor.decrypt(kisAccount.getAppKey());
-        String appSecret = jasyptStringEncryptor.decrypt(kisAccount.getAppSecret());
+        // Try decryption, fallback to plain text if decryption fails (MVP workaround)
+        String appKey;
+        String appSecret;
+        try {
+            appKey = jasyptStringEncryptor.decrypt(kisAccount.getAppKey());
+            appSecret = jasyptStringEncryptor.decrypt(kisAccount.getAppSecret());
+        } catch (Exception e) {
+            log.warn("Jasypt decryption failed for kis_account_id={}, using plain text (MVP mode)", kisAccountId);
+            appKey = kisAccount.getAppKey();
+            appSecret = kisAccount.getAppSecret();
+        }
 
         return new KisCredentials(appKey, appSecret, kisAccount.getAccountNumber(), kisAccount.getAccountProductCode());
     }
