@@ -29,9 +29,11 @@ public class UserSettings {
     @JdbcTypeCode(SqlTypes.JSON)
     private String assetOrder;
 
+    @Builder.Default
     @Column(name = "dark_mode", nullable = false)
     private Boolean darkMode = false;
 
+    @Builder.Default
     @Column(name = "auto_login", nullable = false)
     private Boolean autoLogin = false;
 

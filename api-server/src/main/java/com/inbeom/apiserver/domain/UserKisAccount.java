@@ -27,6 +27,7 @@ public class UserKisAccount {
     @Column(name = "account_number", nullable = false, unique = true, length = 50)
     private String accountNumber;
 
+    @Builder.Default
     @Column(name = "account_product_code", nullable = false, length = 10)
     private String accountProductCode = "01";
 
@@ -36,6 +37,7 @@ public class UserKisAccount {
     @Column(name = "app_secret", nullable = false, length = 255)
     private String appSecret;
 
+    @Builder.Default
     @Column(name = "is_verified", nullable = false)
     private Boolean isVerified = false;
 

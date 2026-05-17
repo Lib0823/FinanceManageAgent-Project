@@ -36,6 +36,7 @@ public class TradeHistory {
     @Column(name = "order_type", nullable = false, length = 10)
     private String orderType;
 
+    @Builder.Default
     @Column(name = "order_status", nullable = false, length = 20)
     private String orderStatus = "PENDING";
 

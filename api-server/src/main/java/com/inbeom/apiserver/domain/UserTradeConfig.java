@@ -24,15 +24,19 @@ public class UserTradeConfig {
     @JoinColumn(name = "user_id", nullable = false, unique = true)
     private User user;
 
+    @Builder.Default
     @Column(name = "order_amount", nullable = false)
     private Long orderAmount = 1000000L;
 
+    @Builder.Default
     @Column(name = "max_holdings", nullable = false)
     private Integer maxHoldings = 10;
 
+    @Builder.Default
     @Column(name = "order_type", nullable = false, length = 20)
     private String orderType = "market";
 
+    @Builder.Default
     @Column(name = "is_active", nullable = false)
     private Boolean isActive = false;
 
