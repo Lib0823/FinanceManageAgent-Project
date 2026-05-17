@@ -126,3 +126,52 @@ a {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-tertiary);
 }
+
+/* Custom Toast Styles */
+.van-toast {
+  padding: 6px 12px !important;
+  background: rgba(30, 41, 59, 0.95) !important;
+  border-radius: 6px !important;
+  font-size: 13px !important;
+  bottom: 100px !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  width: fit-content !important;
+  height: auto !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  line-height: 1 !important;
+}
+
+.van-toast__icon {
+  margin: 0 6px 0 0 !important;
+  width: 16px !important;
+  height: 16px !important;
+  font-size: 16px !important;
+  line-height: 1 !important;
+  flex-shrink: 0 !important;
+}
+
+.van-toast__text {
+  margin: 0 !important;
+  padding: 0 !important;
+  white-space: nowrap !important;
+  line-height: 1 !important;
+}
+
+.success-toast .van-icon {
+  color: #10B981 !important;
+}
+
+.error-toast .van-icon {
+  color: #EF4444 !important;
+}
+
+.warning-toast .van-icon {
+  color: #F59E0B !important;
+}
+
+.info-toast .van-icon {
+  color: #3B82F6 !important;
+}
