@@ -14,18 +14,24 @@ const errorMessage = ref('')
 // 거래 내역 데이터 (API에서 가져옴)
 const history = ref([])
 
-// 요약 데이터
+// 미체결/예약 주문 데이터
+const orders = ref({
+  pending: [],
+  reserved: []
+})
+
+// 요약 데이터 (템플릿 구조에 맞게 수정)
 const summary = ref({
-  totalBuy: 0,
-  totalSell: 0,
-  totalProfit: 0,
-  count: 0
+  buy: { amount: 0, name: '', symbol: '' },
+  sell: { amount: 0, name: '', symbol: '' },
+  other: { amount: 0, label: '배당금' }
 })
 
 // Load trade history
 const loadHistory = async () => {
   try {
     loading.value = true
+    errorMessage.value = ''
     const response = await tradingApi.getHistory()
 
     if (response.data) {
@@ -40,22 +46,58 @@ const loadHistory = async () => {
         amount: (trade.executedPrice || trade.orderPrice) * trade.quantity,
         date: new Date(trade.orderedAt).toLocaleDateString('ko-KR'),
         time: new Date(trade.orderedAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }),
-        status: trade.orderStatus  // PENDING, COMPLETED 등
+        status: trade.orderStatus,  // PENDING, COMPLETED 등
+        currency: '원'
       }))
 
+      // 미체결/예약 주문 필터링
+      orders.value.pending = history.value.filter(t => t.status === 'PENDING')
+      orders.value.reserved = []  // 예약 주문은 별도 API 필요 시 추가
+
       // 요약 데이터 계산
-      summary.value.count = history.value.length
-      summary.value.totalBuy = history.value
-        .filter(t => t.type === 'buy')
-        .reduce((sum, t) => sum + t.amount, 0)
-      summary.value.totalSell = history.value
-        .filter(t => t.type === 'sell')
-        .reduce((sum, t) => sum + t.amount, 0)
-      summary.value.totalProfit = summary.value.totalSell - summary.value.totalBuy
+      const buyTrades = history.value.filter(t => t.type === 'buy' && t.status === 'COMPLETED')
+      const sellTrades = history.value.filter(t => t.type === 'sell' && t.status === 'COMPLETED')
+
+      const totalBuy = buyTrades.reduce((sum, t) => sum + t.amount, 0)
+      const totalSell = sellTrades.reduce((sum, t) => sum + t.amount, 0)
+
+      // 가장 많이 매수한 종목
+      const buyByStock = {}
+      buyTrades.forEach(t => {
+        if (!buyByStock[t.symbol]) {
+          buyByStock[t.symbol] = { amount: 0, name: t.name, symbol: t.symbol }
+        }
+        buyByStock[t.symbol].amount += t.amount
+      })
+      const topBuy = Object.values(buyByStock).sort((a, b) => b.amount - a.amount)[0]
+
+      // 가장 많이 매도한 종목
+      const sellByStock = {}
+      sellTrades.forEach(t => {
+        if (!sellByStock[t.symbol]) {
+          sellByStock[t.symbol] = { amount: 0, name: t.name, symbol: t.symbol }
+        }
+        sellByStock[t.symbol].amount += t.amount
+      })
+      const topSell = Object.values(sellByStock).sort((a, b) => b.amount - a.amount)[0]
+
+      summary.value.buy = topBuy || { amount: 0, name: '-', symbol: '' }
+      summary.value.sell = topSell || { amount: 0, name: '-', symbol: '' }
+      summary.value.other = { amount: totalSell - totalBuy, label: '손익' }
     }
   } catch (error) {
     console.error('Failed to load trade history:', error)
-    errorMessage.value = '거래 내역을 불러오는데 실패했습니다'
+
+    // API 키 에러 처리
+    if (error.response?.status === 401 || error.response?.status === 403) {
+      errorMessage.value = 'API 키를 확인해주세요'
+    } else if (error.code === 'ECONNABORTED' || error.message?.includes('Network') || error.message?.includes('timeout')) {
+      errorMessage.value = '네트워크 연결을 확인해주세요'
+    } else if (error.response?.data?.message) {
+      errorMessage.value = error.response.data.message
+    } else {
+      errorMessage.value = '거래 내역을 불러오는데 실패했습니다'
+    }
   } finally {
     loading.value = false
   }
@@ -154,6 +196,36 @@ const getTypeLabel = (type) => {
       <!-- Tabs -->
       <InvestmentTabs v-model="tabs" />
 
+      <!-- Loading State -->
+      <div v-if="loading" class="state-container">
+        <div class="spinner"></div>
+        <p class="state-message">거래 내역을 불러오는 중...</p>
+      </div>
+
+      <!-- Error State -->
+      <div v-else-if="errorMessage" class="state-container error-state">
+        <div class="error-icon">⚠️</div>
+        <p class="error-message">{{ errorMessage }}</p>
+        <div class="error-actions">
+          <button @click="router.push('/profile')" class="action-button primary">
+            내 정보로 이동
+          </button>
+          <button @click="loadHistory()" class="action-button secondary">
+            다시 시도
+          </button>
+        </div>
+      </div>
+
+      <!-- Empty State -->
+      <div v-else-if="history.length === 0" class="state-container empty-state">
+        <div class="empty-icon">📊</div>
+        <p class="empty-message">거래 내역이 없습니다</p>
+        <p class="empty-submessage">첫 거래를 시작해보세요</p>
+      </div>
+
+      <!-- Normal Content -->
+      <template v-else>
+
       <!-- Pending/Reserved Orders Section -->
       <section class="pending-section">
         <h3 class="section-title">미체결 / 예약 주문</h3>
@@ -224,6 +296,7 @@ const getTypeLabel = (type) => {
           </div>
         </div>
       </section>
+      </template>
     </div>
 
     <!-- Spacer for bottom nav -->
@@ -240,6 +313,120 @@ const getTypeLabel = (type) => {
 
 .content {
   padding: 0 var(--spacing-lg) var(--spacing-lg);
+}
+
+/* State Container (Loading, Error, Empty) */
+.state-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+  padding: var(--spacing-3xl) var(--spacing-xl);
+  text-align: center;
+}
+
+/* Loading State */
+.spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid rgba(139, 92, 246, 0.2);
+  border-top-color: #8B5CF6;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: var(--spacing-lg);
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.state-message {
+  font-size: var(--font-size-base);
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+/* Error State */
+.error-state {
+  background: rgba(239, 68, 68, 0.05);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 16px;
+}
+
+.error-icon {
+  font-size: 64px;
+  margin-bottom: var(--spacing-lg);
+}
+
+.error-message {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: #EF4444;
+  margin: 0 0 var(--spacing-xl) 0;
+}
+
+.error-actions {
+  display: flex;
+  gap: var(--spacing-md);
+  flex-direction: column;
+  width: 100%;
+  max-width: 280px;
+}
+
+.action-button {
+  padding: var(--spacing-md) var(--spacing-lg);
+  border: none;
+  border-radius: var(--radius-lg);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.action-button.primary {
+  background: linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%);
+  color: var(--color-text-inverse);
+}
+
+.action-button.primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
+}
+
+.action-button.secondary {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--color-text-primary);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.action-button.secondary:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* Empty State */
+.empty-state {
+  background: rgba(139, 92, 246, 0.05);
+  border: 1px solid rgba(139, 92, 246, 0.1);
+  border-radius: 16px;
+}
+
+.empty-icon {
+  font-size: 64px;
+  margin-bottom: var(--spacing-lg);
+}
+
+.empty-message {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  margin: 0 0 var(--spacing-xs) 0;
+}
+
+.empty-submessage {
+  font-size: var(--font-size-base);
+  color: var(--color-text-secondary);
+  margin: 0;
 }
 
 /* Pending Orders Section */
