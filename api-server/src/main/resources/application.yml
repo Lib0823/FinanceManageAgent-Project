@@ -41,12 +41,6 @@ spring:
     drop-first: false  # NEVER drop in production!
     contexts: mvp      # Start with MVP context
 
-  # Security Configuration
-  security:
-    user:
-      name: admin
-      password: admin123
-
 # Server Configuration
 server:
   port: 7070
@@ -77,24 +71,13 @@ jasypt:
 
 # KIS API Configuration
 kis:
-  # 모의투자 전용 도메인 (실전투자: https://openapi.koreainvestment.com:9443)
+  # Base URL
+  # - 모의투자: https://openapivts.koreainvestment.com:29443
+  # - 실전투자: https://openapi.koreainvestment.com:9443
   base-url: https://openapivts.koreainvestment.com:29443
 
-  # 모의투자 vs 실전투자 모드 설정
-  # - VIRTUAL: 모의투자 (가상 자금, TR_ID: VTTC*)
-  # - REAL: 실전투자 (실제 자금, TR_ID: TTTC*)
-  # ⚠️ 주의: 모의투자와 실전투자는 별도의 APP Key/Secret이 필요합니다!
-  #   - 모의투자: KIS Developers 포털 > 모의투자 APP 등록
-  #   - 실전투자: KIS Developers 포털 > 실전투자 APP 등록
-  mode: ${KIS_MODE:VIRTUAL}
-
-  # APP Key/Secret (환경 변수로 주입 권장)
-  # ⚠️ 절대 실제 값을 코드에 커밋하지 마세요!
-  app-key: ${KIS_APP_KEY:your-kis-app-key}
-  app-secret: ${KIS_APP_SECRET:your-kis-app-secret}
-
-  # Access Token 캐시 TTL (24시간)
-  # KIS API Access Token은 24시간 유효하므로 23시간으로 설정 (1시간 여유)
+  # Access Token 캐시 TTL
+  # KIS API Access Token은 24시간 유효
   token-cache-ttl: 86400000  # 24 hours (ms)
 
 # CORS Configuration
