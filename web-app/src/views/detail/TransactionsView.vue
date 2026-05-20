@@ -20,10 +20,10 @@ const orders = ref({
   reserved: []
 })
 
-// 요약 데이터 (템플릿 구조에 맞게 수정)
+// 요약 데이터
 const summary = ref({
-  buy: { amount: 0, name: '', symbol: '' },
-  sell: { amount: 0, name: '', symbol: '' },
+  buy: { amount: 0 },
+  sell: { amount: 0 },
   other: { amount: 0, label: '배당금' }
 })
 
@@ -61,29 +61,9 @@ const loadHistory = async () => {
       const totalBuy = buyTrades.reduce((sum, t) => sum + t.amount, 0)
       const totalSell = sellTrades.reduce((sum, t) => sum + t.amount, 0)
 
-      // 가장 많이 매수한 종목
-      const buyByStock = {}
-      buyTrades.forEach(t => {
-        if (!buyByStock[t.symbol]) {
-          buyByStock[t.symbol] = { amount: 0, name: t.name, symbol: t.symbol }
-        }
-        buyByStock[t.symbol].amount += t.amount
-      })
-      const topBuy = Object.values(buyByStock).sort((a, b) => b.amount - a.amount)[0]
-
-      // 가장 많이 매도한 종목
-      const sellByStock = {}
-      sellTrades.forEach(t => {
-        if (!sellByStock[t.symbol]) {
-          sellByStock[t.symbol] = { amount: 0, name: t.name, symbol: t.symbol }
-        }
-        sellByStock[t.symbol].amount += t.amount
-      })
-      const topSell = Object.values(sellByStock).sort((a, b) => b.amount - a.amount)[0]
-
-      summary.value.buy = topBuy || { amount: 0, name: '-', symbol: '' }
-      summary.value.sell = topSell || { amount: 0, name: '-', symbol: '' }
-      summary.value.other = { amount: totalSell - totalBuy, label: '손익' }
+      summary.value.buy = { amount: totalBuy }
+      summary.value.sell = { amount: totalSell }
+      summary.value.other = { amount: 0, label: '배당금' }  // 배당금/입출금은 별도 API 필요
     }
   } catch (error) {
     console.error('Failed to load trade history:', error)
@@ -270,18 +250,16 @@ const getTypeLabel = (type) => {
         <div class="summary-container">
           <div class="summary-card">
             <div class="summary-item">
-              <span class="summary-type buy">매수</span>
+              <span class="summary-type buy">총 매수</span>
               <span class="summary-amount">{{ formatNumber(summary.buy.amount) }}</span>
-              <span class="summary-detail">{{ summary.buy.name }} ({{ summary.buy.symbol }})</span>
             </div>
             <div class="summary-item">
-              <span class="summary-type sell">매도</span>
+              <span class="summary-type sell">총 매도</span>
               <span class="summary-amount">{{ formatNumber(summary.sell.amount) }}</span>
-              <span class="summary-detail">{{ summary.sell.name }} ({{ summary.sell.symbol }})</span>
             </div>
             <div class="summary-item">
               <span class="summary-type other">기타</span>
-              <span class="summary-amount">+{{ formatNumber(summary.other.amount) }}</span>
+              <span class="summary-amount">{{ formatNumber(summary.other.amount) }}</span>
               <span class="summary-detail">{{ summary.other.label }}</span>
             </div>
           </div>
