@@ -7,7 +7,7 @@ import java.util.List;
 
 /**
  * KIS API 주식일별주문체결조회 응답 DTO
- * TR_ID: VTTC8001R (모의투자) / TTTC8001R (실전투자)
+ * TR_ID: VTTC0081R (모의투자) / TTTC0081R (실전투자)
  */
 @Data
 public class KisDailyCcldResponse {

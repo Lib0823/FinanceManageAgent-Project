@@ -101,7 +101,7 @@ public class TradingService {
     }
 
     /**
-     * Get trade history from KIS API (VTTC8001R)
+     * Get trade history from KIS API (VTTC0081R)
      * 최근 3개월 거래내역 조회
      */
     public List<TradeHistoryResponse> getTradeHistory(Long userId) {
@@ -139,7 +139,7 @@ public class TradingService {
         // 4. Call KIS API
         ResponseEntity<KisDailyCcldResponse> response = kisApiClient.get(
                 "/uapi/domestic-stock/v1/trading/inquire-daily-ccld",
-                "VTTC8001R",
+                "VTTC0081R",  // 주식일별주문체결조회 (모의투자)
                 kisToken,
                 credentials.appKey(),
                 credentials.appSecret(),
