@@ -115,7 +115,9 @@ export const userApi = {
   updateSettings: (data) => api.put('/users/settings', data),
   deleteAccount: () => api.delete('/users/me'),
   getKisAccount: () => api.get('/users/kis-account'),
-  updateKisAccount: (data) => api.put('/users/kis-account', data)
+  updateKisAccount: (data) => api.put('/users/kis-account', data),
+  getTradeConfig: () => api.get('/users/trade-config'),
+  updateTradeConfig: (data) => api.put('/users/trade-config', data)
 }
 
 // Asset API
@@ -128,7 +130,8 @@ export const assetApi = {
 export const tradingApi = {
   buy: (order) => api.post('/trading/buy', order),
   sell: (order) => api.post('/trading/sell', order),
-  getHistory: () => api.get('/trading/history')
+  getHistory: () => api.get('/trading/history'),
+  getHoldings: () => api.get('/trading/holdings')
 }
 
 // ========== APIs below are not yet implemented in api-server ==========
@@ -172,6 +175,13 @@ export const botApi = {
   getAnalysis: (symbol) => api.get(`/bot/analysis/${symbol}`),
   toggleBot: (enabled) => api.post('/bot/toggle', { enabled }),
   updateSettings: (settings) => api.put('/bot/settings', settings)
+}
+
+// Market Analysis API (Spring Boot api-server)
+export const marketAnalysisApi = {
+  getSummary: (date) => api.get('/market/summary', { params: date ? { date } : {} }),
+  getSentiment: (date) => api.get('/market/sentiment', { params: date ? { date } : {} }),
+  getDecisions: (date) => api.get('/market/decisions', { params: date ? { date } : {} })
 }
 
 export default api
