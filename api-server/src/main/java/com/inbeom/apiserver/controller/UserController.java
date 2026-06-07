@@ -1,12 +1,7 @@
 package com.inbeom.apiserver.controller;
 
 import com.inbeom.apiserver.dto.common.ApiResponse;
-import com.inbeom.apiserver.dto.user.KisAccountResponse;
-import com.inbeom.apiserver.dto.user.UpdateKisAccountRequest;
-import com.inbeom.apiserver.dto.user.UpdateUserProfileRequest;
-import com.inbeom.apiserver.dto.user.UpdateUserSettingsRequest;
-import com.inbeom.apiserver.dto.user.UserProfileResponse;
-import com.inbeom.apiserver.dto.user.UserSettingsResponse;
+import com.inbeom.apiserver.dto.user.*;
 import com.inbeom.apiserver.service.UserService;
 import com.inbeom.apiserver.util.JwtTokenProvider;
 import jakarta.validation.Valid;
@@ -151,6 +146,43 @@ public class UserController {
 
         return ResponseEntity.ok(
                 ApiResponse.success("KIS account updated successfully", kisAccount)
+        );
+    }
+
+    /**
+     * GET /api/users/trade-config
+     * Get user trade configuration
+     */
+    @GetMapping("/trade-config")
+    public ResponseEntity<ApiResponse<TradeConfigResponse>> getTradeConfig(
+            @RequestHeader("Authorization") String authHeader
+    ) {
+        String token = authHeader.substring(7);
+        Long userId = jwtTokenProvider.getUserIdFromToken(token);
+
+        TradeConfigResponse config = userService.getTradeConfig(userId);
+
+        return ResponseEntity.ok(
+                ApiResponse.success("Trade configuration retrieved successfully", config)
+        );
+    }
+
+    /**
+     * PUT /api/users/trade-config
+     * Update user trade configuration
+     */
+    @PutMapping("/trade-config")
+    public ResponseEntity<ApiResponse<TradeConfigResponse>> updateTradeConfig(
+            @RequestHeader("Authorization") String authHeader,
+            @Valid @RequestBody UpdateTradeConfigRequest request
+    ) {
+        String token = authHeader.substring(7);
+        Long userId = jwtTokenProvider.getUserIdFromToken(token);
+
+        TradeConfigResponse config = userService.updateTradeConfig(userId, request);
+
+        return ResponseEntity.ok(
+                ApiResponse.success("Trade configuration updated successfully", config)
         );
     }
 }

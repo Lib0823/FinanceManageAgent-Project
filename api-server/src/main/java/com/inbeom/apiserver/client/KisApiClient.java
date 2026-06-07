@@ -20,16 +20,22 @@ public class KisApiClient {
     @Value("${kis.base-url}")
     private String kisBaseUrl;
 
-    @Value("${kis.mode}")
-    private String kisMode;
+    /**
+     * Check if current KIS API is real trading mode
+     * - Virtual trading: openapivts.koreainvestment.com
+     * - Real trading: openapi.koreainvestment.com
+     */
+    private boolean isRealTrading() {
+        return kisBaseUrl != null && kisBaseUrl.contains("openapi.koreainvestment.com");
+    }
 
     /**
-     * Convert TR_ID based on KIS mode (VIRTUAL/REAL)
-     * - VIRTUAL: VTTC* (모의투자)
-     * - REAL: TTTC* (실전투자)
+     * Convert TR_ID based on KIS base URL
+     * - Virtual trading (openapivts): VTTC* (모의투자)
+     * - Real trading (openapi): TTTC* (실전투자)
      *
      * @param baseTrId Base TR_ID (e.g., "VTTC8434R")
-     * @return Converted TR_ID based on mode
+     * @return Converted TR_ID based on base URL
      */
     public String convertTrId(String baseTrId) {
         if (baseTrId == null || baseTrId.length() < 4) {
@@ -37,14 +43,14 @@ public class KisApiClient {
         }
 
         String suffix = baseTrId.substring(4); // "8434R" 부분
-        String prefix = "REAL".equalsIgnoreCase(kisMode) ? "TTTC" : "VTTC";
+        String prefix = isRealTrading() ? "TTTC" : "VTTC";
 
         return prefix + suffix;
     }
 
     /**
      * Call KIS API with authentication headers
-     * TR_ID는 kis.mode 설정에 따라 자동 변환됩니다 (VTTC ↔ TTTC)
+     * TR_ID는 base URL에 따라 자동 변환됩니다 (VTTC ↔ TTTC)
      */
     public <T> ResponseEntity<T> callKisApi(
             String endpoint,
@@ -58,9 +64,10 @@ public class KisApiClient {
     ) {
         String url = kisBaseUrl + endpoint;
 
-        // TR_ID 자동 변환 (VIRTUAL → VTTC*, REAL → TTTC*)
+        // TR_ID 자동 변환 (Virtual → VTTC*, Real → TTTC*)
         String convertedTrId = convertTrId(trId);
-        log.debug("TR_ID conversion: {} → {} (mode: {})", trId, convertedTrId, kisMode);
+        String mode = isRealTrading() ? "REAL" : "VIRTUAL";
+        log.debug("TR_ID conversion: {} → {} (mode: {})", trId, convertedTrId, mode);
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);

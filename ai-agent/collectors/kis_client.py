@@ -1,0 +1,735 @@
+"""KIS API client with OAuth authentication and rate limiting."""
+import asyncio
+import logging
+import os
+from datetime import datetime, timedelta, date
+from pathlib import Path
+from typing import Optional, Dict, List
+import aiohttp
+import pandas as pd
+from dotenv import load_dotenv
+
+from config.constants import KIS_MAX_REQUESTS_PER_SECOND, KIS_REQUEST_DELAY
+
+logger = logging.getLogger(__name__)
+
+
+class KISClient:
+    """
+    KIS Open API client with async support and rate limiting.
+
+    Features:
+    - OAuth token caching (24-hour TTL)
+    - TR_ID auto-conversion (VIRTUAL/REAL mode)
+    - Rate limiting (5 requests/second)
+    - Comprehensive error handling
+    """
+
+    def __init__(self):
+        # Load credentials directly from .env to avoid pydantic-settings parsing issues
+        # (pydantic-settings truncates AppSecret with '=' character)
+        # Find .env file in ai-agent directory
+        env_path = Path(__file__).parent.parent / '.env'
+        load_dotenv(dotenv_path=env_path, override=True)
+
+        self.app_key = os.getenv('KIS_APP_KEY')
+        self.app_secret = os.getenv('KIS_APP_SECRET')
+        self.mode = os.getenv('KIS_MODE', 'VIRTUAL')
+        self.base_url = os.getenv('KIS_BASE_URL', 'https://openapi.koreainvestment.com:9443')
+
+        if not self.app_key or not self.app_secret:
+            raise ValueError("KIS_APP_KEY and KIS_APP_SECRET must be set in .env file")
+
+        self.access_token: Optional[str] = None
+        self.token_expires_at: Optional[datetime] = None
+        self.token_lock = asyncio.Lock()  # Prevent concurrent token requests
+
+        # Rate limiting semaphore
+        self.semaphore = asyncio.Semaphore(KIS_MAX_REQUESTS_PER_SECOND)
+
+        logger.info(f"KISClient initialized in {self.mode} mode")
+        logger.debug(f"AppKey length: {len(self.app_key)}, AppSecret length: {len(self.app_secret)}")
+
+    async def get_access_token(self) -> str:
+        """
+        Get OAuth access token (cached for 24 hours).
+
+        Thread-safe with asyncio.Lock to prevent concurrent token requests.
+        KIS API limits: 1 token request per minute.
+
+        Returns:
+            str: Access token for API authorization
+        """
+        # Return cached token if still valid (fast path without lock)
+        if self.access_token and self.token_expires_at and datetime.now() < self.token_expires_at:
+            logger.debug("Using cached access token")
+            return self.access_token
+
+        # Acquire lock to prevent concurrent token requests
+        async with self.token_lock:
+            # Double-check after acquiring lock (another coroutine may have fetched token)
+            if self.access_token and self.token_expires_at and datetime.now() < self.token_expires_at:
+                logger.debug("Using cached access token (acquired after lock)")
+                return self.access_token
+
+            logger.info("Fetching new access token from KIS API")
+            url = f'{self.base_url}/oauth2/tokenP'
+
+            # KIS API requires form-encoded data, not JSON
+            data = {
+                'grant_type': 'client_credentials',
+                'appkey': self.app_key,
+                'appsecret': self.app_secret
+            }
+
+            headers = {
+                'Content-Type': 'application/json; charset=utf-8'
+            }
+
+            logger.debug(f"OAuth request URL: {url}")
+            logger.debug(f"OAuth request appkey length: {len(self.app_key) if self.app_key else 0}")
+            logger.debug(f"OAuth request appsecret length: {len(self.app_secret) if self.app_secret else 0}")
+
+            try:
+                async with aiohttp.ClientSession() as session:
+                    # Use json= parameter but with proper content-type header
+                    async with session.post(url, json=data, headers=headers) as response:
+                        logger.debug(f"OAuth response status: {response.status}")
+
+                        if response.status != 200:
+                            error_text = await response.text()
+                            logger.error(f"OAuth failed with status {response.status}: {error_text}")
+                            raise RuntimeError(f"KIS OAuth failed: HTTP {response.status} - {error_text}")
+
+                        result = await response.json()
+
+                        self.access_token = result['access_token']
+                        # KIS tokens are valid for 24 hours
+                        self.token_expires_at = datetime.now() + timedelta(hours=24)
+
+                        logger.info("Access token acquired successfully")
+                        return self.access_token
+
+            except aiohttp.ClientError as e:
+                logger.error(f"Failed to get access token: {e}")
+                raise RuntimeError(f"KIS OAuth failed: {e}")
+
+    def convert_tr_id(self, base_tr_id: str) -> str:
+        """
+        Convert TR_ID based on mode (VIRTUAL/REAL).
+
+        VIRTUAL: VTTC* (모의투자)
+        REAL: TTTC* (실전투자)
+
+        Args:
+            base_tr_id: Base TR_ID (e.g., 'VTTC8434R')
+
+        Returns:
+            str: Converted TR_ID based on mode
+        """
+        if base_tr_id is None or len(base_tr_id) < 4:
+            return base_tr_id
+
+        suffix = base_tr_id[4:]  # Extract suffix (e.g., '8434R')
+
+        if self.mode == 'REAL' and base_tr_id.startswith('VTTC'):
+            converted = f'TTTC{suffix}'
+            logger.debug(f"TR_ID converted: {base_tr_id} → {converted}")
+            return converted
+        elif self.mode == 'VIRTUAL' and base_tr_id.startswith('TTTC'):
+            converted = f'VTTC{suffix}'
+            logger.debug(f"TR_ID converted: {base_tr_id} → {converted}")
+            return converted
+
+        return base_tr_id
+
+    async def request(
+        self,
+        method: str,
+        endpoint: str,
+        tr_id: str,
+        params: Optional[Dict] = None,
+        json_data: Optional[Dict] = None
+    ) -> Dict:
+        """
+        Make KIS API request with rate limiting and authentication.
+
+        Args:
+            method: HTTP method ('GET' or 'POST')
+            endpoint: API endpoint path
+            tr_id: Transaction ID (will be auto-converted)
+            params: Query parameters for GET requests
+            json_data: JSON body for POST requests
+
+        Returns:
+            Dict: API response JSON
+        """
+        async with self.semaphore:
+            token = await self.get_access_token()
+            tr_id_converted = self.convert_tr_id(tr_id)
+
+            headers = {
+                'authorization': f'Bearer {token}',
+                'appkey': self.app_key,
+                'appsecret': self.app_secret,
+                'tr_id': tr_id_converted,
+                'custtype': 'P',  # Personal account
+                'content-type': 'application/json'
+            }
+
+            url = f'{self.base_url}{endpoint}'
+
+            try:
+                async with aiohttp.ClientSession() as session:
+                    if method == 'GET':
+                        async with session.get(url, headers=headers, params=params) as response:
+                            response.raise_for_status()
+                            result = await response.json()
+                    elif method == 'POST':
+                        async with session.post(url, headers=headers, json=json_data) as response:
+                            response.raise_for_status()
+                            result = await response.json()
+                    else:
+                        raise ValueError(f"Unsupported HTTP method: {method}")
+
+                    # Check KIS API response code
+                    if result.get('rt_cd') != '0':
+                        error_msg = result.get('msg1', 'Unknown error')
+                        logger.error(f"KIS API error: {error_msg}")
+                        raise RuntimeError(f"KIS API error: {error_msg}")
+
+                    # Rate limiting delay
+                    await asyncio.sleep(KIS_REQUEST_DELAY)
+
+                    return result
+
+            except aiohttp.ClientError as e:
+                logger.error(f"KIS API request failed: {method} {endpoint} - {e}")
+                raise RuntimeError(f"KIS API request failed: {e}")
+
+    async def is_market_open(self, trade_date: Optional[datetime.date] = None) -> bool:
+        """
+        Check if market is open for the given date.
+
+        Strategy:
+        1. Weekend check (basic)
+        2. Test supply/demand API (real-time data, returns 500 on holidays)
+
+        Args:
+            trade_date: Date to check (defaults to today if not provided)
+
+        Returns:
+            True if market is open, False if closed/holiday
+        """
+        from datetime import datetime, date
+        import pytz
+
+        # Check 1: Weekend check
+        kst = pytz.timezone('Asia/Seoul')
+
+        # Determine which date to check
+        if trade_date:
+            if isinstance(trade_date, date) and not isinstance(trade_date, datetime):
+                check_date = datetime.combine(trade_date, datetime.min.time())
+            else:
+                check_date = trade_date
+        else:
+            check_date = datetime.now(kst)
+
+        weekday = check_date.weekday()
+        date_str = check_date.strftime('%A')
+
+        if weekday >= 5:  # Saturday=5, Sunday=6
+            logger.info(f"🚫 Market is closed (weekend: {date_str})")
+            return False
+
+        # Check 2: Test supply/demand API (real-time, fails on holidays)
+        endpoint = '/uapi/domestic-stock/v1/quotations/inquire-investor'
+        tr_id = 'FHKST01010900'
+
+        params = {
+            'FID_COND_MRKT_DIV_CODE': 'J',
+            'FID_INPUT_ISCD': '005930'  # Samsung Electronics (most reliable)
+        }
+
+        try:
+            result = await self.request('GET', endpoint, tr_id, params=params)
+            output = result.get('output', {})
+
+            if not output:
+                logger.info("🚫 Market is closed (no data returned)")
+                return False
+
+            # If we got real-time supply/demand data, market is open
+            logger.info(f"✅ Market is open ({check_date.strftime('%Y-%m-%d')})")
+            return True
+
+        except RuntimeError as e:
+            error_str = str(e)
+
+            # Check for OAuth rate limit (403)
+            if '403' in error_str or 'Forbidden' in error_str:
+                logger.warning(f"⚠️ OAuth rate limit hit during market check. Assuming market is OPEN (weekday verified).")
+                return True  # Weekday check passed, so likely open despite OAuth issue
+
+            # Check for holiday (500 Internal Server Error)
+            if '500' in error_str or 'Internal Server Error' in error_str:
+                logger.info(f"🚫 Market is closed (holiday detected via API: {error_str[:100]})")
+                return False
+
+            # Other errors - assume closed to be safe
+            logger.warning(f"⚠️ Market status unclear: {e}. Assuming closed for safety.")
+            return False
+
+    async def get_supply_demand(self, stock_code: str) -> Dict[str, int]:
+        """
+        Get foreign and institutional net buy amounts.
+
+        API: FHKST01010900 (외국인·기관 순매수)
+
+        Args:
+            stock_code: 6-digit stock code
+
+        Returns:
+            Dict with keys:
+                - foreign_net_buy: 외국인 순매수 금액 (원)
+                - institutional_net_buy: 기관 순매수 금액 (원)
+
+        Note:
+            Returns zeros on market holidays (HTTP 500 errors)
+        """
+        endpoint = '/uapi/domestic-stock/v1/quotations/inquire-investor'
+        tr_id = 'FHKST01010900'
+
+        params = {
+            'FID_COND_MRKT_DIV_CODE': 'J',
+            'FID_INPUT_ISCD': stock_code
+        }
+
+        try:
+            result = await self.request('GET', endpoint, tr_id, params=params)
+            output = result.get('output', [])
+
+            # Output is a list of daily data (30 days), use most recent (index 0)
+            if not output or not isinstance(output, list):
+                logger.warning(f"Empty or invalid output for {stock_code}")
+                return {'foreign_net_buy': 0, 'institutional_net_buy': 0}
+
+            # Get most recent day's data (index 0)
+            output_data = output[0]
+
+            # Correct key names: *_tr_pbmn (거래대금백만원, trading amount in millions of KRW)
+            # NOT *_ntby_amt (그런 키는 존재하지 않음)
+            foreign_net_buy = int(output_data.get('frgn_ntby_tr_pbmn', 0) or 0) * 1_000_000  # 백만원 → 원
+            institutional_net_buy = int(output_data.get('orgn_ntby_tr_pbmn', 0) or 0) * 1_000_000  # 백만원 → 원
+
+            logger.debug(f"Supply demand for {stock_code}: foreign={foreign_net_buy:,}원, institutional={institutional_net_buy:,}원")
+
+            return {
+                'foreign_net_buy': foreign_net_buy,
+                'institutional_net_buy': institutional_net_buy
+            }
+
+        except RuntimeError as e:
+            # Check if error is due to market holiday (HTTP 500)
+            error_str = str(e)
+            if '500' in error_str or 'Internal Server Error' in error_str:
+                logger.warning(f"Market holiday detected for {stock_code}, using zero supply/demand data")
+                return {'foreign_net_buy': 0, 'institutional_net_buy': 0}
+            else:
+                # Re-raise non-holiday errors
+                raise
+
+    async def get_daily_ohlcv(self, stock_code: str, days: int = 30) -> pd.DataFrame:
+        """
+        Get daily OHLCV data for volume and volatility calculation.
+
+        API: FHKST01010400 (일봉 조회)
+
+        Args:
+            stock_code: 6-digit stock code
+            days: Number of trading days to fetch (default: 30 for 20-day MA)
+
+        Returns:
+            DataFrame with columns:
+                - trade_date: 거래일 (YYYYMMDD)
+                - open: 시가
+                - high: 고가
+                - low: 저가
+                - close: 종가
+                - volume: 거래량
+
+        Note:
+            Returns empty DataFrame on market holidays or API errors
+        """
+        endpoint = '/uapi/domestic-stock/v1/quotations/inquire-daily-price'
+        tr_id = 'FHKST01010400'
+
+        params = {
+            'FID_COND_MRKT_DIV_CODE': 'J',
+            'FID_INPUT_ISCD': stock_code,
+            'FID_PERIOD_DIV_CODE': 'D',  # Daily
+            'FID_ORG_ADJ_PRC': '0'  # Not adjusted for rights
+        }
+
+        try:
+            result = await self.request('GET', endpoint, tr_id, params=params)
+            output_list = result.get('output', [])
+
+            if not output_list:
+                logger.warning(f"No daily data for {stock_code}")
+                return pd.DataFrame()
+
+            # Parse daily data (KIS returns newest first)
+            data = []
+            for item in output_list[:days]:
+                data.append({
+                    'trade_date': item['stck_bsop_date'],
+                    'open': int(item['stck_oprc']),
+                    'high': int(item['stck_hgpr']),
+                    'low': int(item['stck_lwpr']),
+                    'close': int(item['stck_clpr']),
+                    'volume': int(item['acml_vol'])
+                })
+
+            df = pd.DataFrame(data)
+            df = df.sort_values('trade_date').reset_index(drop=True)  # Oldest first
+
+            logger.debug(f"Fetched {len(df)} days of OHLCV for {stock_code}")
+
+            return df
+
+        except RuntimeError as e:
+            # Return empty DataFrame on API errors (including market holidays)
+            error_str = str(e)
+            if '500' in error_str or 'Internal Server Error' in error_str:
+                logger.warning(f"Market holiday detected for {stock_code}, skipping OHLCV data")
+            else:
+                logger.error(f"Failed to fetch OHLCV for {stock_code}: {e}")
+            return pd.DataFrame()
+
+    async def get_minute_data(self, stock_code: str, date: str) -> pd.DataFrame:
+        """
+        Get minute-level price data for morning_return calculation (09:00-10:00).
+
+        API: FHKST01010600 (분봉 조회)
+
+        Args:
+            stock_code: 6-digit stock code
+            date: Target date in YYYYMMDD format
+
+        Returns:
+            DataFrame with columns:
+                - time: 시각 (HHMMSS)
+                - open_price: 시가
+                - high_price: 고가
+                - low_price: 저가
+                - close_price: 종가
+                - volume: 거래량
+        """
+        endpoint = '/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice'
+        tr_id = 'FHKST01010600'
+
+        params = {
+            'FID_COND_MRKT_DIV_CODE': 'J',
+            'FID_INPUT_ISCD': stock_code,
+            'FID_INPUT_DATE_1': date,
+            'FID_INPUT_HOUR_1': '090000',  # 09:00:00
+            'FID_PW_DATA_INCU_YN': 'Y'  # Include price data
+        }
+
+        result = await self.request('GET', endpoint, tr_id, params=params)
+        output_list = result.get('output2', [])  # Note: output2 for minute data
+
+        if not output_list:
+            logger.warning(f"No minute data for {stock_code} on {date}")
+            return pd.DataFrame()
+
+        # Parse minute data
+        data = []
+        for item in output_list:
+            time_str = item['stck_cntg_hour']  # HHMMSS format
+
+            # Filter for 09:00-10:00 period
+            hour = int(time_str[:2])
+            if hour < 9 or hour >= 10:
+                continue
+
+            data.append({
+                'time': time_str,
+                'open_price': int(item['stck_oprc']),
+                'high_price': int(item['stck_hgpr']),
+                'low_price': int(item['stck_lwpr']),
+                'close_price': int(item['stck_prpr']),
+                'volume': int(item['cntg_vol'])
+            })
+
+        df = pd.DataFrame(data)
+        df = df.sort_values('time').reset_index(drop=True)  # Chronological order
+
+        logger.debug(f"Fetched {len(df)} minutes of data for {stock_code} on {date}")
+
+        return df
+
+    async def get_current_price(self, stock_code: str) -> Dict[str, float]:
+        """
+        Get current stock price for investment limit calculation.
+
+        Args:
+            stock_code: 6-digit stock code
+
+        Returns:
+            Dict with current_price (현재가)
+
+        API: FHKST01010100 (주식현재가 시세)
+        """
+        logger.debug(f"Fetching current price for {stock_code}")
+
+        endpoint = '/uapi/domestic-stock/v1/quotations/inquire-price'
+        tr_id = 'FHKST01010100'
+
+        params = {
+            'FID_COND_MRKT_DIV_CODE': 'J',
+            'FID_INPUT_ISCD': stock_code
+        }
+
+        try:
+            async with self.semaphore:  # Rate limiting
+                result = await self.request('GET', endpoint, tr_id, params)
+                await asyncio.sleep(0.2)  # 5 req/sec
+
+                if result.get('rt_cd') == '0':  # Success
+                    output = result['output']
+                    current_price = int(output['stck_prpr'])  # 주식 현재가
+
+                    logger.debug(f"Current price for {stock_code}: {current_price:,}원")
+
+                    return {
+                        'current_price': current_price
+                    }
+                else:
+                    error_msg = result.get('msg1', 'Unknown error')
+                    logger.error(f"Failed to fetch current price for {stock_code}: {error_msg}")
+                    return {'current_price': 0}
+
+        except Exception as e:
+            logger.exception(f"Exception while fetching current price for {stock_code}: {e}")
+            return {'current_price': 0}
+
+    async def get_kospi_index(self) -> Dict[str, float]:
+        """
+        Get KOSPI index data for market daily summary.
+
+        API: FHKUP03500100 (업종/지수 조회)
+
+        Args:
+            None - KOSPI code is fixed as '0001'
+
+        Returns:
+            Dict with keys:
+                - kospi_index: KOSPI 지수값
+                - kospi_change_rate: 전일 대비 등락률 (%)
+                - kospi_volume: 거래량
+                - kospi_trade_value: 거래대금 (백만원)
+        """
+        logger.info("Fetching KOSPI index data")
+
+        endpoint = '/uapi/domestic-stock/v1/quotations/inquire-index-price'
+        tr_id = 'FHKUP03500100'
+
+        params = {
+            'FID_COND_MRKT_DIV_CODE': 'U',  # 업종
+            'FID_INPUT_ISCD': '0001'  # KOSPI 코드
+        }
+
+        try:
+            result = await self.request('GET', endpoint, tr_id, params=params)
+            output = result.get('output', {})
+
+            kospi_index = float(output.get('bstp_nmix_prpr', 0))  # 업종 지수
+            kospi_change_rate = float(output.get('bstp_nmix_prdy_ctrt', 0))  # 전일 대비 등락률
+            kospi_volume = int(output.get('acml_vol', 0))  # 누적 거래량
+            kospi_trade_value = int(output.get('acml_tr_pbmn', 0))  # 누적 거래대금 (백만원)
+
+            logger.info(f"KOSPI Index: {kospi_index:.2f}, Change: {kospi_change_rate:.2f}%, Volume: {kospi_volume:,}")
+
+            return {
+                'kospi_index': kospi_index,
+                'kospi_change_rate': kospi_change_rate,
+                'kospi_volume': kospi_volume,
+                'kospi_trade_value': kospi_trade_value
+            }
+
+        except Exception as e:
+            logger.error(f"Error fetching KOSPI index: {e}")
+            return {
+                'kospi_index': 0.0,
+                'kospi_change_rate': 0.0,
+                'kospi_volume': 0,
+                'kospi_trade_value': 0
+            }
+
+    async def get_holdings(self) -> List[str]:
+        """
+        Get list of currently held stock codes from KIS API.
+
+        API: VTTC8434R (모의투자 잔고조회) / TTTC8434R (실전투자 잔고조회)
+
+        Returns:
+            List of 6-digit stock codes currently in portfolio
+            Empty list if error or no holdings
+        """
+        logger.info("Fetching holdings from KIS API")
+
+        endpoint = '/uapi/domestic-stock/v1/trading/inquire-balance'
+        tr_id = 'VTTC8434R'  # Auto-converted to TTTC8434R in REAL mode
+
+        params = {
+            'CANO': os.getenv('KIS_ACCOUNT_NUMBER', ''),  # 종합계좌번호
+            'ACNT_PRDT_CD': os.getenv('KIS_ACCOUNT_PRODUCT_CODE', '01'),  # 계좌상품코드 (01: 종합)
+            'AFHR_FLPR_YN': 'N',  # 시간외단일가여부 (N: 정규장)
+            'OFL_YN': '',  # 오프라인여부
+            'INQR_DVSN': '01',  # 조회구분 (01: 대출일별, 02: 종목별)
+            'UNPR_DVSN': '01',  # 단가구분 (01: 기본)
+            'FUND_STTL_ICLD_YN': 'N',  # 펀드결제분포함여부 (N: 미포함)
+            'FNCG_AMT_AUTO_RDPT_YN': 'N',  # 융자금액자동상환여부 (N: 미상환)
+            'PRCS_DVSN': '01',  # 처리구분 (01: 전일매매포함)
+            'CTX_AREA_FK100': '',  # 연속조회검색조건100
+            'CTX_AREA_NK100': ''  # 연속조회키100
+        }
+
+        try:
+            result = await self.request('GET', endpoint, tr_id, params=params)
+
+            # output1: 보유 종목 리스트
+            holdings_list = result.get('output1', [])
+
+            if not holdings_list:
+                logger.info("No holdings found in portfolio")
+                return []
+
+            # Extract stock codes (6-digit) from holdings
+            stock_codes = []
+            for holding in holdings_list:
+                stock_code = holding.get('pdno', '')  # 상품번호 (종목코드)
+                quantity = int(holding.get('hldg_qty', 0))  # 보유수량
+
+                # Only include holdings with positive quantity
+                if stock_code and quantity > 0:
+                    stock_codes.append(stock_code)
+
+            logger.info(f"Found {len(stock_codes)} holdings: {stock_codes}")
+            return stock_codes
+
+        except Exception as e:
+            logger.error(f"Error fetching holdings: {e}")
+            logger.warning("Continuing without holdings (will only use Top 30 filtered stocks)")
+            return []
+
+    async def fetch_stock_data_parallel(self, stock_codes: List[str]) -> pd.DataFrame:
+        """
+        Fetch supply/demand and OHLCV data for multiple stocks in batches.
+
+        Processes stocks in batches of 10 to prevent overwhelming the KIS API.
+        Each batch respects the rate limit (5 req/sec) via Semaphore.
+
+        Args:
+            stock_codes: List of 6-digit stock codes
+
+        Returns:
+            DataFrame with columns:
+                - stock_code
+                - foreign_net_buy
+                - institutional_net_buy
+                - volume_ratio (전날 거래량 / 20일 평균 거래량)
+                - price_volatility ((고가-저가) / 저가)
+        """
+        logger.info(f"Fetching data for {len(stock_codes)} stocks in batches")
+
+        async def fetch_single_stock(stock_code: str) -> Optional[Dict]:
+            try:
+                # Fetch supply/demand and OHLCV SEQUENTIALLY (not concurrently)
+                # This matches individual test pattern that achieves 80/100 success
+                # Concurrent requests (even with Semaphore) overwhelm KIS API
+
+                # Step 1: Fetch supply/demand first
+                try:
+                    supply_demand = await self.get_supply_demand(stock_code)
+                except Exception as e:
+                    logger.warning(f"Supply/demand fetch failed for {stock_code}: {e}")
+                    return None
+
+                # Step 2: Fetch OHLCV second (after supply/demand completes)
+                try:
+                    ohlcv_df = await self.get_daily_ohlcv(stock_code, days=21)  # 20-day MA + 1 latest
+                except Exception as e:
+                    logger.warning(f"OHLCV fetch failed for {stock_code}: {e}")
+                    return None
+
+                if ohlcv_df.empty or len(ohlcv_df) < 2:
+                    logger.warning(f"Insufficient OHLCV data for {stock_code}: {len(ohlcv_df)} rows")
+                    return None
+
+                # Calculate volume ratio (전날 거래량 / 20일 평균 거래량)
+                if len(ohlcv_df) >= 21:
+                    volume_ma_20 = ohlcv_df['volume'].iloc[:-1].tail(20).mean()
+                    latest_volume = ohlcv_df['volume'].iloc[-1]
+                    volume_ratio = latest_volume / volume_ma_20 if volume_ma_20 > 0 else 1.0
+                else:
+                    # Fallback if less than 21 days
+                    volume_ratio = 1.0
+
+                # Calculate price volatility ((고가-저가) / 저가)
+                latest_day = ohlcv_df.iloc[-1]
+                price_volatility = (latest_day['high'] - latest_day['low']) / latest_day['low'] if latest_day['low'] > 0 else 0.0
+
+                # Calculate close_position ((종가-저가)/(고가-저가)) for Stage 2 reuse
+                high_low_diff = latest_day['high'] - latest_day['low']
+                close_position = (latest_day['close'] - latest_day['low']) / high_low_diff if high_low_diff > 0 else 0.5
+
+                return {
+                    'stock_code': stock_code,
+                    'foreign_net_buy': supply_demand['foreign_net_buy'],
+                    'institutional_net_buy': supply_demand['institutional_net_buy'],
+                    'volume_ratio': volume_ratio,
+                    'price_volatility': price_volatility,
+                    'close_position': close_position  # Add for Stage 2 reuse
+                }
+
+            except Exception as e:
+                logger.error(f"Error fetching data for {stock_code}: {e}")
+                return None
+
+        # Process stocks SEQUENTIALLY (one at a time) to match individual test success rate
+        # Individual test achieves 80/100 success, pipeline should match this
+        # Root cause: Concurrent requests overwhelm KIS API despite Semaphore
+        # Solution: Process one stock at a time with 0.1s delay (matching individual test)
+        valid_results = []
+        total_stocks = len(stock_codes)
+
+        logger.info(f"===== COLLECTION DEBUG START: {total_stocks} stocks =====")
+
+        for idx, stock_code in enumerate(stock_codes, 1):
+            logger.info(f"[{idx}/{total_stocks}] Processing: {stock_code}")
+
+            # Fetch single stock data
+            result = await fetch_single_stock(stock_code)
+
+            if result is not None:
+                valid_results.append(result)
+                logger.info(f"[{idx}/{total_stocks}] {stock_code}: ✅ SUCCESS (Total: {len(valid_results)})")
+            else:
+                logger.warning(f"[{idx}/{total_stocks}] {stock_code}: ❌ FAILED (Total success: {len(valid_results)})")
+
+            # Rate limiting: 0.1s delay between stocks (matching individual test exactly)
+            if idx < total_stocks:  # Don't delay after last stock
+                await asyncio.sleep(0.1)
+
+        if not valid_results:
+            logger.error("No valid stock data fetched")
+            return pd.DataFrame()
+
+        df = pd.DataFrame(valid_results)
+        logger.info(f"Successfully fetched data for {len(df)}/{len(stock_codes)} stocks (success rate: {len(df)/len(stock_codes)*100:.1f}%)")
+
+        return df

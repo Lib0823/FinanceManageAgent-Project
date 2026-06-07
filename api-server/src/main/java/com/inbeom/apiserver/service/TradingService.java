@@ -2,7 +2,10 @@ package com.inbeom.apiserver.service;
 
 import com.inbeom.apiserver.client.KisApiClient;
 import com.inbeom.apiserver.domain.User;
+import com.inbeom.apiserver.dto.kis.KisBalanceResponse;
 import com.inbeom.apiserver.dto.kis.KisDailyCcldResponse;
+import com.inbeom.apiserver.dto.trade.BalanceSummaryResponse;
+import com.inbeom.apiserver.dto.trade.HoldingResponse;
 import com.inbeom.apiserver.dto.trade.TradeHistoryResponse;
 import com.inbeom.apiserver.exception.UserNotFoundException;
 import com.inbeom.apiserver.repository.UserRepository;
@@ -13,6 +16,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -101,7 +105,7 @@ public class TradingService {
     }
 
     /**
-     * Get trade history from KIS API (VTTC8001R)
+     * Get trade history from KIS API (VTTC0081R)
      * 최근 3개월 거래내역 조회
      */
     public List<TradeHistoryResponse> getTradeHistory(Long userId) {
@@ -139,7 +143,7 @@ public class TradingService {
         // 4. Call KIS API
         ResponseEntity<KisDailyCcldResponse> response = kisApiClient.get(
                 "/uapi/domestic-stock/v1/trading/inquire-daily-ccld",
-                "VTTC8001R",
+                "VTTC0081R",  // 주식일별주문체결조회 (모의투자)
                 kisToken,
                 credentials.appKey(),
                 credentials.appSecret(),
@@ -252,5 +256,137 @@ public class TradingService {
             return (String) output.get("ODNO");
         }
         return null;
+    }
+
+    /**
+     * Get holdings (보유 종목 조회) from KIS API (VTTC8434R)
+     */
+    public BalanceSummaryResponse getHoldings(Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new UserNotFoundException(userId));
+
+        // 1. Get KIS account from user
+        Long kisAccountId = user.getKisAccount().getId();
+
+        // 2. Get KIS credentials and token
+        String kisToken = kisAuthService.getKisAccessToken(kisAccountId);
+        KisCredentials credentials = kisAuthService.getKisCredentials(kisAccountId);
+
+        // 3. Build query parameters
+        Map<String, String> queryParams = new HashMap<>();
+        queryParams.put("CANO", credentials.accountNumber());
+        queryParams.put("ACNT_PRDT_CD", credentials.accountProductCode());
+        queryParams.put("AFHR_FLPR_YN", "N");  // 시간외단일가여부
+        queryParams.put("OFL_YN", "");  // 오프라인여부
+        queryParams.put("INQR_DVSN", "02");  // 조회구분: 01-대출일별, 02-종목별
+        queryParams.put("UNPR_DVSN", "01");  // 단가구분: 01-기본값
+        queryParams.put("FUND_STTL_ICLD_YN", "N");  // 펀드결제분포함여부
+        queryParams.put("FNCG_AMT_AUTO_RDPT_YN", "N");  // 융자금액자동상환여부
+        queryParams.put("PRCS_DVSN", "01");  // 처리구분: 00-전일, 01-당일
+        queryParams.put("CTX_AREA_FK100", "");  // 연속조회검색조건100
+        queryParams.put("CTX_AREA_NK100", "");  // 연속조회키100
+
+        // 4. Call KIS API
+        ResponseEntity<KisBalanceResponse> response = kisApiClient.get(
+                "/uapi/domestic-stock/v1/trading/inquire-balance",
+                "VTTC8434R",  // 주식잔고조회 (모의투자)
+                kisToken,
+                credentials.appKey(),
+                credentials.appSecret(),
+                queryParams,
+                KisBalanceResponse.class
+        );
+
+        // 5. Map KIS response to BalanceSummaryResponse
+        if (response.getBody() == null) {
+            log.warn("Empty balance response from KIS API for userId={}", userId);
+            return BalanceSummaryResponse.builder()
+                    .holdings(new ArrayList<>())
+                    .totalEvaluationAmount(BigDecimal.ZERO)
+                    .totalPurchaseAmount(BigDecimal.ZERO)
+                    .totalProfitLoss(BigDecimal.ZERO)
+                    .totalProfitLossRate(BigDecimal.ZERO)
+                    .cashBalance(BigDecimal.ZERO)
+                    .build();
+        }
+
+        KisBalanceResponse body = response.getBody();
+
+        // Map output1 (holdings)
+        List<HoldingResponse> holdings = new ArrayList<>();
+        if (body.getOutput1() != null && !body.getOutput1().isEmpty()) {
+            holdings = body.getOutput1().stream()
+                    .map(this::mapToHoldingResponse)
+                    .collect(Collectors.toList());
+        }
+
+        // Map output2 (summary)
+        KisBalanceResponse.Output2 summary = body.getOutput2() != null && !body.getOutput2().isEmpty()
+                ? body.getOutput2().get(0)
+                : new KisBalanceResponse.Output2();
+
+        // Calculate totals from holdings if Output2 fields are null
+        BigDecimal totalEvaluationAmount = parseBigDecimalSafely(summary.getTotEvluAmt());
+        BigDecimal totalPurchaseAmount = parseBigDecimalSafely(summary.getPchsAmtSmtl());
+        BigDecimal totalProfitLoss = parseBigDecimalSafely(summary.getEvluPflsSmtl());
+        BigDecimal totalProfitLossRate = parseBigDecimalSafely(summary.getEvluPflsRt());
+        BigDecimal cashBalance = parseBigDecimalSafely(summary.getDncaTotAmt());
+
+        // If Output2 fields are zero/null, calculate from holdings
+        if ((totalPurchaseAmount == null || totalPurchaseAmount.compareTo(BigDecimal.ZERO) == 0) && !holdings.isEmpty()) {
+            log.info("Output2 summary fields are null/zero, calculating from holdings");
+
+            // Calculate sums from holdings
+            totalPurchaseAmount = holdings.stream()
+                    .map(HoldingResponse::getPurchaseAmount)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            totalProfitLoss = holdings.stream()
+                    .map(HoldingResponse::getProfitLoss)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            totalEvaluationAmount = holdings.stream()
+                    .map(HoldingResponse::getEvaluationAmount)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            // Calculate profit/loss rate: (totalProfitLoss / totalPurchaseAmount) * 100
+            if (totalPurchaseAmount.compareTo(BigDecimal.ZERO) > 0) {
+                totalProfitLossRate = totalProfitLoss
+                        .divide(totalPurchaseAmount, 4, RoundingMode.HALF_UP)
+                        .multiply(new BigDecimal("100"));
+            } else {
+                totalProfitLossRate = BigDecimal.ZERO;
+            }
+        }
+
+        log.info("Final Balance Summary - TotalEvaluation: {}, TotalPurchase: {}, TotalProfitLoss: {}, ProfitRate: {}%, Cash: {}",
+                totalEvaluationAmount, totalPurchaseAmount, totalProfitLoss, totalProfitLossRate, cashBalance);
+
+        return BalanceSummaryResponse.builder()
+                .holdings(holdings)
+                .totalEvaluationAmount(totalEvaluationAmount)
+                .totalPurchaseAmount(totalPurchaseAmount)
+                .totalProfitLoss(totalProfitLoss)
+                .totalProfitLossRate(totalProfitLossRate)
+                .cashBalance(cashBalance)
+                .build();
+    }
+
+    /**
+     * Map KIS Output1 to HoldingResponse
+     */
+    private HoldingResponse mapToHoldingResponse(KisBalanceResponse.Output1 item) {
+        return HoldingResponse.builder()
+                .stockCode(item.getPdno())
+                .stockName(item.getPrdtName())
+                .holdingQuantity(parseIntSafely(item.getHldgQty()))
+                .availableQuantity(parseIntSafely(item.getOrdPsblQty()))
+                .averagePrice(parseBigDecimalSafely(item.getPchsAvgPric()))
+                .currentPrice(parseBigDecimalSafely(item.getPrpr()))
+                .evaluationAmount(parseBigDecimalSafely(item.getEvluAmt()))
+                .profitLoss(parseBigDecimalSafely(item.getEvluPflsAmt()))
+                .profitLossRate(parseBigDecimalSafely(item.getEvluPflsRt()))
+                .purchaseAmount(parseBigDecimalSafely(item.getPchsAmt()))
+                .build();
     }
 }

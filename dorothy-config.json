@@ -1,0 +1,101 @@
+{
+  "name": "FinanceManage Agent Project",
+  "description": "AI-powered stock auto-trading system with KOSPI analysis",
+  "version": "1.0.0",
+  "integration": {
+    "dorothy": {
+      "enabled": true,
+      "projectPath": "/Users/inbeom/IdeaProjects/FinanceManage_Agent-Project",
+      "memoryPath": "~/.claude/projects/financemanage-agent-project/memory"
+    }
+  },
+  "services": {
+    "frontend": {
+      "name": "Vue3 Web App",
+      "path": "./web-app",
+      "port": 5173,
+      "commands": {
+        "start": "npm run dev",
+        "build": "npm run build",
+        "test": "npm run test",
+        "lint": "npm run lint"
+      }
+    },
+    "backend": {
+      "name": "Spring Boot API Server",
+      "path": "./api-server",
+      "port": 8080,
+      "commands": {
+        "start": "./gradlew bootRun",
+        "build": "./gradlew build",
+        "test": "./gradlew test",
+        "clean": "./gradlew clean"
+      }
+    },
+    "ai": {
+      "name": "FastAPI AI Agent",
+      "path": "./ai-agent",
+      "port": 8000,
+      "commands": {
+        "start": "uvicorn main:app --reload --port 8000",
+        "install": "pip install -r requirements.txt",
+        "test": "pytest"
+      }
+    },
+    "database": {
+      "name": "PostgreSQL",
+      "port": 5432,
+      "credentials": {
+        "host": "localhost",
+        "database": "finance_manage",
+        "user": "postgres",
+        "password": "postgres"
+      }
+    }
+  },
+  "docker": {
+    "compose": {
+      "file": "./docker-compose.yml",
+      "commands": {
+        "up": "docker-compose up -d",
+        "down": "docker-compose down",
+        "logs": "docker-compose logs -f"
+      }
+    }
+  },
+  "mcp": {
+    "servers": {
+      "finance-orchestrator": {
+        "description": "Orchestrates financial analysis and trading operations",
+        "capabilities": [
+          "Stock filtering and scoring",
+          "Sentiment analysis coordination",
+          "Trade execution management",
+          "Chart generation control"
+        ]
+      },
+      "data-collector": {
+        "description": "Manages data collection from APIs",
+        "capabilities": [
+          "KIS API integration",
+          "DART financial data",
+          "News RSS feeds",
+          "Real-time market data"
+        ]
+      }
+    }
+  },
+  "workflows": {
+    "daily-trading": {
+      "schedule": "0 50 8 * * 1-5",
+      "steps": [
+        "Filter KOSPI 100 to top 30",
+        "Collect market data",
+        "Run 3-way analysis",
+        "Generate charts",
+        "AI decision making",
+        "Execute trades"
+      ]
+    }
+  }
+}

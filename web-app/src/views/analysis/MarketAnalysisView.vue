@@ -1,13 +1,18 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AppHeader from '@/components/common/AppHeader.vue'
+import { marketAnalysisApi } from '@/services/api'
 
 const router = useRouter()
 
-// 현재 날짜
-const today = new Date()
-const todayStr = `${today.getFullYear()}.${String(today.getMonth() + 1).padStart(2, '0')}.${String(today.getDate()).padStart(2, '0')}`
+// 분석 날짜
+const analysisDate = ref(null)
+const analysisDateStr = ref('')
+
+// Loading state
+const loading = ref(true)
+const error = ref(null)
 
 // TOP3 toggle state
 const activeTop3 = ref('buy') // 'buy' or 'sell'
@@ -15,101 +20,228 @@ const activeTop3 = ref('buy') // 'buy' or 'sell'
 // 30종목 히트맵 데이터
 const heatmapStats = ref({
   totalStocks: 30,
-  buyCandidate: 18,
-  sellCandidate: 4,
-  neutral: 8
+  buyCandidate: 0,
+  sellCandidate: 0,
+  neutral: 0
+})
+
+// 히트맵 상세 데이터
+const heatmapData = ref([])
+const heatmapInsights = ref({
+  avgForeignNetBuy: 0,
+  avgInstitutionalNetBuy: 0,
+  avgSentiment: 0,
+  topStock: { name: '', score: 0 }
 })
 
 // Gemini AI 매수 TOP3
-const buyTop3 = ref([
-  {
-    rank: 1,
-    icon: 'SK',
-    iconBg: 'rgba(248,113,113,.12)',
-    iconColor: '#f87171',
-    name: 'SK하이닉스',
-    reason: '외국인 순매수 강세 · 감성 +0.44 · 가격 상승 기조',
-    score: 0.89,
-    scoreClass: 'up'
-  },
-  {
-    rank: 2,
-    icon: '삼',
-    iconBg: 'rgba(251,191,36,.12)',
-    iconColor: '#fbbf24',
-    name: '삼성전자',
-    reason: '기관 순매수 지속 · ROE 양호 · 장초반 모멘텀 양수',
-    score: 0.72,
-    scoreClass: 'yw'
-  },
-  {
-    rank: 3,
-    icon: '현',
-    iconBg: 'rgba(52,211,153,.12)',
-    iconColor: '#34d399',
-    name: '현대차',
-    reason: '거래량 배율 3.2배 · 감성 +0.31 · PER 저평가',
-    score: 0.61,
-    scoreClass: 'nt'
-  }
-])
+const buyTop3 = ref([])
 
 // Gemini AI 매도 TOP3
-const sellTop3 = ref([
-  {
-    rank: 1,
-    icon: 'LG',
-    iconBg: 'rgba(96,165,250,.12)',
-    iconColor: '#60a5fa',
-    name: 'LG에너지솔루션',
-    reason: '외국인 순매도 · 감성 -0.21 · 하락 추세',
-    score: 0.18,
-    scoreClass: 'dn'
-  },
-  {
-    rank: 2,
-    icon: '—',
-    iconBg: 'var(--color-bg-tertiary)',
-    iconColor: 'var(--color-text-tertiary)',
-    name: '해당 없음',
-    reason: '',
-    score: null,
-    scoreClass: 'empty',
-    isEmpty: true
-  },
-  {
-    rank: 3,
-    icon: '—',
-    iconBg: 'var(--color-bg-tertiary)',
-    iconColor: 'var(--color-text-tertiary)',
-    name: '해당 없음',
-    reason: '',
-    score: null,
-    scoreClass: 'empty',
-    isEmpty: true
-  }
-])
+const sellTop3 = ref([])
 
 // 시장 전반 감성분석 데이터
 const marketSentiment = ref({
-  score: 0.28,
-  label: '긍정 우세',
+  score: 0,
+  label: '중립',
   distribution: {
-    positive: { count: 17, percent: 57, color: '#f87171' },
-    neutral: { count: 9, percent: 30, color: '#4a5568' },
-    negative: { count: 4, percent: 13, color: '#60a5fa' }
+    positive: { count: 0, percent: 0, color: '#f87171' },
+    neutral: { count: 0, percent: 0, color: '#4a5568' },
+    negative: { count: 0, percent: 0, color: '#60a5fa' }
   },
   timeRange: '전날 18:00 — 당일 08:50',
   sources: '한경 · 매경 · 연합'
 })
 
+// Fetch market data
+const fetchMarketData = async () => {
+  try {
+    loading.value = true
+    error.value = null
+
+    // 1. Get latest analysis date first
+    const latestDateResponse = await marketAnalysisApi.getLatestDate()
+    const latestDate = latestDateResponse.data.latest_date
+
+    if (!latestDate) {
+      error.value = '분석 데이터가 없습니다.'
+      loading.value = false
+      return
+    }
+
+    analysisDate.value = latestDate
+
+    // Format date for display (handle ISO date string format)
+    const dateObj = new Date(latestDate + 'T00:00:00') // Add time to ensure correct timezone
+    analysisDateStr.value = `${dateObj.getFullYear()}.${String(dateObj.getMonth() + 1).padStart(2, '0')}.${String(dateObj.getDate()).padStart(2, '0')}`
+
+    // 2. Fetch all market data in parallel using the latest date
+    const [summaryResponse, sentimentResponse, decisionsResponse, heatmapResponse] = await Promise.all([
+      marketAnalysisApi.getSummary(latestDate),
+      marketAnalysisApi.getSentiment(latestDate),
+      marketAnalysisApi.getDecisions(latestDate),
+      marketAnalysisApi.getHeatmap(latestDate)
+    ])
+
+    // Process summary data
+    if (summaryResponse && summaryResponse.data) {
+      const summary = summaryResponse.data
+      heatmapStats.value = {
+        totalStocks: summary.statistics.total || 30,
+        buyCandidate: summary.statistics.buy_candidate || 0,
+        sellCandidate: summary.statistics.sell_candidate || 0,
+        neutral: summary.statistics.neutral || 0
+      }
+    } else {
+      // No summary data available
+      console.warn('Market summary data is empty for date:', latestDate)
+    }
+
+    // Process heatmap data
+    if (heatmapResponse && heatmapResponse.data && heatmapResponse.data.stocks) {
+      const stocks = heatmapResponse.data.stocks
+      heatmapData.value = stocks
+
+      // Calculate insights
+      if (stocks.length > 0) {
+        // Average foreign/institutional net buy
+        const totalForeignNetBuy = stocks.reduce((sum, s) => sum + (s.foreign_net_buy || 0), 0)
+        const totalInstitutionalNetBuy = stocks.reduce((sum, s) => sum + (s.institutional_net_buy || 0), 0)
+        const totalSentiment = stocks.reduce((sum, s) => sum + (s.sentiment_score || 0), 0)
+
+        heatmapInsights.value.avgForeignNetBuy = Math.round(totalForeignNetBuy / stocks.length)
+        heatmapInsights.value.avgInstitutionalNetBuy = Math.round(totalInstitutionalNetBuy / stocks.length)
+        heatmapInsights.value.avgSentiment = (totalSentiment / stocks.length).toFixed(2)
+
+        // Find top stock by combined score (simplified scoring)
+        let topStock = stocks[0]
+        let maxScore = 0
+
+        stocks.forEach(stock => {
+          // Simple scoring: positive factors
+          const score = (
+            (stock.foreign_net_buy > 0 ? 1 : 0) +
+            (stock.institutional_net_buy > 0 ? 1 : 0) +
+            (stock.sentiment_score > 0 ? 1 : 0) +
+            (stock.price_trend > 0 ? 1 : 0) +
+            (stock.volume_trend > 0 ? 1 : 0)
+          )
+
+          if (score > maxScore) {
+            maxScore = score
+            topStock = stock
+          }
+        })
+
+        heatmapInsights.value.topStock = {
+          name: topStock.stock_name,
+          score: maxScore
+        }
+      }
+    }
+
+    // Process sentiment data
+    if (sentimentResponse && sentimentResponse.data) {
+      marketSentiment.value = sentimentResponse.data
+    }
+
+    // Process decisions data
+    if (decisionsResponse && decisionsResponse.data) {
+      const decisions = decisionsResponse.data
+
+      // Check if we have actual decision data
+      const hasBuyData = decisions.buy_top3.some(s => s.stock_code !== null)
+      const hasSellData = decisions.sell_top3.some(s => s.stock_code !== null)
+
+      if (!hasBuyData && !hasSellData) {
+        console.warn('AI trade decisions are empty for date:', latestDate)
+      }
+
+      // Map buy TOP3
+      buyTop3.value = decisions.buy_top3.map(stock => ({
+        rank: stock.rank,
+        icon: getStockIcon(stock.stock_name),
+        iconBg: getIconBg(stock.rank),
+        iconColor: getIconColor(stock.rank),
+        name: stock.stock_name,
+        reason: stock.reason || '',
+        score: stock.score,
+        scoreClass: getScoreClass(stock.score),
+        isEmpty: !stock.stock_code
+      }))
+
+      // Map sell TOP3
+      sellTop3.value = decisions.sell_top3.map(stock => ({
+        rank: stock.rank,
+        icon: getStockIcon(stock.stock_name),
+        iconBg: getIconBg(stock.rank),
+        iconColor: getIconColor(stock.rank),
+        name: stock.stock_name,
+        reason: stock.reason || '',
+        score: stock.score,
+        scoreClass: getScoreClass(stock.score),
+        isEmpty: !stock.stock_code
+      }))
+    }
+
+  } catch (err) {
+    console.error('Failed to fetch market data:', err)
+    error.value = '시장 데이터를 불러올 수 없습니다.'
+  } finally {
+    loading.value = false
+  }
+}
+
+// Helper functions
+const getStockIcon = (name) => {
+  if (!name || name === '해당 없음') return '—'
+  return name.substring(0, 2)
+}
+
+const getIconBg = (rank) => {
+  const colors = [
+    'rgba(248,113,113,.12)',
+    'rgba(251,191,36,.12)',
+    'rgba(52,211,153,.12)'
+  ]
+  return colors[rank - 1] || 'var(--color-bg-tertiary)'
+}
+
+const getIconColor = (rank) => {
+  const colors = ['#f87171', '#fbbf24', '#34d399']
+  return colors[rank - 1] || 'var(--color-text-tertiary)'
+}
+
+const getScoreClass = (score) => {
+  if (!score) return 'empty'
+  if (score >= 0.8) return 'up'
+  if (score >= 0.6) return 'yw'
+  if (score >= 0.4) return 'nt'
+  return 'dn'
+}
+
 const toggleTop3 = (type) => {
   activeTop3.value = type
+}
+
+const formatNumber = (num) => {
+  if (num === 0) return '0'
+  const absNum = Math.abs(num)
+  if (absNum >= 100000000) {
+    return `${(num / 100000000).toFixed(1)}억`
+  } else if (absNum >= 10000) {
+    return `${(num / 10000).toFixed(1)}만`
+  }
+  return num.toLocaleString()
 }
 
 const goBack = () => {
   router.push('/bot')
 }
+
+onMounted(() => {
+  fetchMarketData()
+})
 </script>
 
 <template>
@@ -118,7 +250,7 @@ const goBack = () => {
       <template #right>
         <div class="header-meta">
           <div class="live-dot"></div>
-          <div class="header-date">{{ todayStr }}</div>
+          <div class="header-date">{{ analysisDateStr || '조회중...' }}</div>
         </div>
       </template>
     </AppHeader>
@@ -191,12 +323,38 @@ const goBack = () => {
               <div class="stat-value neutral">{{ heatmapStats.neutral }}</div>
             </div>
           </div>
+
+          <!-- 추가 인사이트 -->
+          <div class="insights-section">
+            <div class="insight-row">
+              <span class="insight-label">평균 외국인 순매수</span>
+              <span :class="['insight-value', heatmapInsights.avgForeignNetBuy > 0 ? 'up' : 'dn']">
+                {{ heatmapInsights.avgForeignNetBuy > 0 ? '+' : '' }}{{ formatNumber(heatmapInsights.avgForeignNetBuy) }}원
+              </span>
+            </div>
+            <div class="insight-row">
+              <span class="insight-label">평균 기관 순매수</span>
+              <span :class="['insight-value', heatmapInsights.avgInstitutionalNetBuy > 0 ? 'up' : 'dn']">
+                {{ heatmapInsights.avgInstitutionalNetBuy > 0 ? '+' : '' }}{{ formatNumber(heatmapInsights.avgInstitutionalNetBuy) }}원
+              </span>
+            </div>
+            <div class="insight-row">
+              <span class="insight-label">평균 감성 점수</span>
+              <span :class="['insight-value', heatmapInsights.avgSentiment > 0 ? 'up' : 'dn']">
+                {{ heatmapInsights.avgSentiment > 0 ? '+' : '' }}{{ heatmapInsights.avgSentiment }}
+              </span>
+            </div>
+            <div class="insight-row highlight">
+              <span class="insight-label">💎 최고 점수 종목</span>
+              <span class="insight-value highlight">{{ heatmapInsights.topStock.name || '분석중' }}</span>
+            </div>
+          </div>
         </div>
       </div>
 
       <!-- ② Gemini AI 매매 판단 -->
       <div class="analysis-section">
-        <div class="section-label">Gemini AI 매매 판단</div>
+        <div class="section-label">AI 매매 판단</div>
         <div class="section-card">
           <!-- Toggle Buttons -->
           <div class="top3-toggle">
@@ -485,6 +643,59 @@ const goBack = () => {
 .stat-value.dn { color: #60a5fa; }
 .stat-value.nt { color: #2dd4bf; }
 .stat-value.neutral { color: var(--color-text-secondary); }
+
+/* Insights Section */
+.insights-section {
+  padding: var(--spacing-md);
+  padding-top: var(--spacing-sm);
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.5) 0%, rgba(30, 41, 59, 0.5) 100%);
+  border-top: 1px solid var(--color-border);
+}
+
+.insight-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.insight-row:last-child {
+  border-bottom: none;
+}
+
+.insight-row.highlight {
+  background: rgba(167, 139, 250, 0.08);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  margin-top: 4px;
+  border-bottom: none;
+}
+
+.insight-label {
+  font-size: 10.5px;
+  color: var(--color-text-secondary);
+  font-weight: var(--font-weight-medium);
+}
+
+.insight-value {
+  font-size: 11.5px;
+  font-weight: var(--font-weight-semibold);
+  font-family: 'DM Mono', monospace;
+}
+
+.insight-value.up {
+  color: #f87171;
+}
+
+.insight-value.dn {
+  color: #60a5fa;
+}
+
+.insight-value.highlight {
+  color: var(--color-primary);
+  font-size: 12px;
+}
 
 /* TOP3 Toggle */
 .top3-toggle {

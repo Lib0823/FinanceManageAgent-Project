@@ -1,0 +1,347 @@
+databaseChangeLog:
+  # Web-App 표시를 위한 추가 테이블들
+
+  # ========================================
+  # 시장 전체 일일 요약 테이블
+  # ========================================
+  - changeSet:
+      id: 1.7.1-create-market-daily-summary
+      author: claude
+      context: mvp
+      comment: "Create market_daily_summary table for market overview data"
+      changes:
+        - createTable:
+            tableName: market_daily_summary
+            columns:
+              - column:
+                  name: id
+                  type: BIGSERIAL
+                  constraints:
+                    primaryKey: true
+              - column:
+                  name: summary_date
+                  type: DATE
+                  constraints:
+                    nullable: false
+                    unique: true
+              - column:
+                  name: kospi_index
+                  type: NUMERIC(10,2)
+              - column:
+                  name: kospi_change_rate
+                  type: NUMERIC(6,2)
+              - column:
+                  name: kospi_volume
+                  type: BIGINT
+              - column:
+                  name: total_stocks
+                  type: INT
+              - column:
+                  name: rising_stocks
+                  type: INT
+              - column:
+                  name: falling_stocks
+                  type: INT
+              - column:
+                  name: unchanged_stocks
+                  type: INT
+              - column:
+                  name: total_foreign_net_buy
+                  type: BIGINT
+              - column:
+                  name: total_institutional_net_buy
+                  type: BIGINT
+              - column:
+                  name: market_sentiment_score
+                  type: NUMERIC(5,3)
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+        - createIndex:
+            indexName: idx_market_summary_date
+            tableName: market_daily_summary
+            columns:
+              - column:
+                  name: summary_date
+                  descending: true
+        - setTableRemarks:
+            tableName: market_daily_summary
+            remarks: '시장 전체 일일 요약 데이터'
+        - setColumnRemarks:
+            tableName: market_daily_summary
+            columnName: kospi_index
+            remarks: 'KOSPI 지수'
+        - setColumnRemarks:
+            tableName: market_daily_summary
+            columnName: kospi_change_rate
+            remarks: 'KOSPI 변화율(%)'
+        - setColumnRemarks:
+            tableName: market_daily_summary
+            columnName: kospi_volume
+            remarks: 'KOSPI 거래량'
+        - setColumnRemarks:
+            tableName: market_daily_summary
+            columnName: market_sentiment_score
+            remarks: '시장 전반 뉴스 감성 점수'
+
+  # ========================================
+  # 실시간 가격 정보 테이블
+  # ========================================
+  - changeSet:
+      id: 1.7.2-create-stock-realtime-price
+      author: claude
+      context: mvp
+      comment: "Create stock_realtime_price table for cached price data"
+      changes:
+        - createTable:
+            tableName: stock_realtime_price
+            columns:
+              - column:
+                  name: id
+                  type: BIGSERIAL
+                  constraints:
+                    primaryKey: true
+              - column:
+                  name: stock_code
+                  type: VARCHAR(10)
+                  constraints:
+                    nullable: false
+                    unique: true
+              - column:
+                  name: stock_name
+                  type: VARCHAR(50)
+              - column:
+                  name: current_price
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: change_amount
+                  type: BIGINT
+              - column:
+                  name: change_rate
+                  type: NUMERIC(6,2)
+              - column:
+                  name: volume
+                  type: BIGINT
+              - column:
+                  name: high_price
+                  type: BIGINT
+              - column:
+                  name: low_price
+                  type: BIGINT
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+        - createIndex:
+            indexName: idx_realtime_price_code
+            tableName: stock_realtime_price
+            columns:
+              - column:
+                  name: stock_code
+        - createIndex:
+            indexName: idx_realtime_price_updated
+            tableName: stock_realtime_price
+            columns:
+              - column:
+                  name: updated_at
+                  descending: true
+        - setTableRemarks:
+            tableName: stock_realtime_price
+            remarks: '종목별 실시간 가격 정보 (캐시)'
+        - setColumnRemarks:
+            tableName: stock_realtime_price
+            columnName: current_price
+            remarks: '현재가'
+        - setColumnRemarks:
+            tableName: stock_realtime_price
+            columnName: change_amount
+            remarks: '전일 대비 변화량'
+        - setColumnRemarks:
+            tableName: stock_realtime_price
+            columnName: change_rate
+            remarks: '전일 대비 변화율(%)'
+
+  # ========================================
+  # 보유 종목 현황 테이블
+  # ========================================
+  - changeSet:
+      id: 1.7.3-create-user-holdings
+      author: claude
+      context: mvp
+      comment: "Create user_holdings table for portfolio management"
+      changes:
+        - createTable:
+            tableName: user_holdings
+            columns:
+              - column:
+                  name: id
+                  type: BIGSERIAL
+                  constraints:
+                    primaryKey: true
+              - column:
+                  name: user_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+                    foreignKeyName: fk_user_holdings_user
+                    references: users(id)
+                    deleteCascade: true
+              - column:
+                  name: stock_code
+                  type: VARCHAR(10)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: stock_name
+                  type: VARCHAR(50)
+              - column:
+                  name: quantity
+                  type: INT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: avg_price
+                  type: BIGINT
+              - column:
+                  name: current_price
+                  type: BIGINT
+              - column:
+                  name: profit_loss
+                  type: BIGINT
+              - column:
+                  name: profit_loss_rate
+                  type: NUMERIC(6,2)
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+        - addUniqueConstraint:
+            tableName: user_holdings
+            columnNames: user_id, stock_code
+            constraintName: uk_user_holdings_user_stock
+        - createIndex:
+            indexName: idx_user_holdings_user
+            tableName: user_holdings
+            columns:
+              - column:
+                  name: user_id
+        - createIndex:
+            indexName: idx_user_holdings_stock
+            tableName: user_holdings
+            columns:
+              - column:
+                  name: stock_code
+        - setTableRemarks:
+            tableName: user_holdings
+            remarks: '사용자별 보유 종목 현황'
+        - setColumnRemarks:
+            tableName: user_holdings
+            columnName: avg_price
+            remarks: '평균 매입가'
+        - setColumnRemarks:
+            tableName: user_holdings
+            columnName: current_price
+            remarks: '현재가'
+        - setColumnRemarks:
+            tableName: user_holdings
+            columnName: profit_loss
+            remarks: '평가 손익 (현재가 - 평균매입가) * 수량'
+        - setColumnRemarks:
+            tableName: user_holdings
+            columnName: profit_loss_rate
+            remarks: '평가 손익률(%)'
+
+  # ========================================
+  # 추가 뷰 생성
+  # ========================================
+  - changeSet:
+      id: 1.7.4-create-analysis-summary-view
+      author: claude
+      context: mvp
+      comment: "Create comprehensive analysis summary view"
+      changes:
+        - createView:
+            viewName: v_stock_analysis_summary
+            selectQuery: |
+              SELECT
+                  sfs.stock_code,
+                  sfs.stock_name,
+                  sfs.score_date,
+                  sfs.scaler_score,
+                  sfs.foreign_net_buy,
+                  sfs.institutional_net_buy,
+                  sfs.morning_return,
+                  sfs.close_position,
+                  sf.per,
+                  sf.roe,
+                  sf.operating_margin,
+                  na.sentiment_score,
+                  na.news_count,
+                  pf.price_trend,
+                  pf.volume_trend,
+                  pf.price_uncertainty,
+                  pf.yhat_d1,
+                  pf.yhat_d5,
+                  srp.current_price,
+                  srp.change_rate,
+                  atd.decision,
+                  atd.reason as ai_reason,
+                  atd.rank as ai_rank,
+                  sfr.passed as safety_passed,
+                  sfr.failure_reason
+              FROM stock_filter_score sfs
+              LEFT JOIN stock_financial sf
+                  ON sfs.stock_code = sf.stock_code
+                  AND sf.base_date = (SELECT MAX(base_date) FROM stock_financial WHERE stock_code = sf.stock_code)
+              LEFT JOIN news_analysis na
+                  ON sfs.stock_code = na.stock_code
+                  AND sfs.score_date = na.analysis_date
+              LEFT JOIN prophet_forecast pf
+                  ON sfs.stock_code = pf.stock_code
+                  AND sfs.score_date = pf.forecast_date
+              LEFT JOIN stock_realtime_price srp
+                  ON sfs.stock_code = srp.stock_code
+              LEFT JOIN ai_trade_decision atd
+                  ON sfs.stock_code = atd.stock_code
+                  AND sfs.score_date = atd.decision_date
+              LEFT JOIN safety_filter_result sfr
+                  ON sfs.stock_code = sfr.stock_code
+                  AND sfs.score_date = sfr.filter_date
+              WHERE sfs.is_selected = TRUE
+
+  - changeSet:
+      id: 1.7.5-create-market-overview-view
+      author: claude
+      context: mvp
+      comment: "Create market overview aggregation view"
+      changes:
+        - createView:
+            viewName: v_market_overview
+            selectQuery: |
+              SELECT
+                  mds.summary_date,
+                  mds.kospi_index,
+                  mds.kospi_change_rate,
+                  mds.kospi_volume,
+                  mds.total_stocks,
+                  mds.rising_stocks,
+                  mds.falling_stocks,
+                  mds.unchanged_stocks,
+                  mds.total_foreign_net_buy,
+                  mds.total_institutional_net_buy,
+                  mds.market_sentiment_score,
+                  (SELECT COUNT(*) FROM ai_trade_decision WHERE decision_date = mds.summary_date AND decision = 'buy') as buy_signals,
+                  (SELECT COUNT(*) FROM ai_trade_decision WHERE decision_date = mds.summary_date AND decision = 'sell') as sell_signals,
+                  (SELECT COUNT(*) FROM safety_filter_result WHERE filter_date = mds.summary_date AND passed = true) as safety_passed_count,
+                  (SELECT COUNT(*) FROM trade_execution_plan WHERE execution_date = mds.summary_date AND execution_status = 'EXECUTED') as executed_trades
+              FROM market_daily_summary mds
+              ORDER BY mds.summary_date DESC

@@ -172,6 +172,66 @@
 
 ---
 
+## 🤖 투자 봇 (BotView)
+
+### 거래 설정 관리 (Trade Configuration)
+| 항목 | API-Server | Web-App | 연동 | 비고 |
+|------|-----------|---------|------|------|
+| GET /users/trade-config | ✅ | ✅ | ✅ | UserController.java:153-168, UserService.java:45-60 |
+| PUT /users/trade-config | ✅ | ✅ | ✅ | UserController.java:174-187, UserService.java:65-91 |
+| 투자금액 설정 | ✅ | ✅ | ✅ | orderAmount (Long), BotView.vue:42-53, 97-133 |
+| 봇 활성화 토글 | ✅ | ✅ | ✅ | isActive (Boolean), BotView.vue:114-119 |
+| 설정 저장 기능 | ✅ | ✅ | ✅ | maxHoldings, orderType 기본값 유지 |
+
+### 보유 종목 조회 (Holdings)
+| 항목 | API-Server | Web-App | 연동 | 비고 |
+|------|-----------|---------|------|------|
+| GET /trading/holdings | ✅ | ✅ | ✅ | TradingController.java:99-116, TradingService.java:261-354 |
+| KIS API 연동 | ✅ | - | ✅ | TR_ID: VTTC8434R (주식잔고조회), KisBalanceResponse DTO |
+| 보유 종목 목록 | ✅ | ✅ | ✅ | BalanceSummaryResponse.holdings (List<HoldingResponse>) |
+| 평가금액 표시 | ✅ | ✅ | ✅ | HoldingResponse.evaluationAmount |
+| 평가손익 표시 | ✅ | ✅ | ✅ | HoldingResponse.profitLoss + profitLossRate |
+| 매도가능수량 표시 | ✅ | ✅ | ✅ | HoldingResponse.availableQuantity |
+| 평균단가 표시 | ✅ | ✅ | ✅ | HoldingResponse.averagePrice |
+| 총 평가금액 | ✅ | ✅ | ✅ | BalanceSummaryResponse.totalEvaluationAmount |
+| 현금 잔고 | ✅ | ✅ | ✅ | BalanceSummaryResponse.cashBalance |
+| AI 분석 | ⏸️ | ✅ | ⏸️ | Mock 데이터로 임시 표시 |
+
+### BotView 화면 구성
+| 항목 | 상태 | 구현 파일 | 비고 |
+|------|------|-----------|------|
+| 투자 봇 상태 표시 | ✅ | BotView.vue:104-204 | 총 평가금액, 수익률, 활성화 상태 |
+| 투자금액 섹션 | ✅ | BotView.vue:206-218 | 투자금액 표시 + 설정 버튼 |
+| 설정 모달 | ✅ | BotView.vue:336-399 | 봇 활성화, 투자금액, 시장 선택 |
+| 보유 종목 카드 | ✅ | BotView.vue:242-330 | 종목 정보, 평가 데이터, AI 분석 |
+| API 연동 | ✅ | BotView.vue:55-136 | onMounted에서 loadTradeConfig, loadHoldings 호출 |
+
+### DTO 구조
+| DTO | 역할 | 필드 | 비고 |
+|-----|------|------|------|
+| TradeConfigResponse | 거래 설정 응답 | id, orderAmount, maxHoldings, orderType, isActive | UserService.java:48-56 |
+| UpdateTradeConfigRequest | 거래 설정 수정 요청 | orderAmount, maxHoldings, orderType, isActive | 모든 필드 필수 (Validation) |
+| BalanceSummaryResponse | 보유 종목 요약 | holdings (List), totalEvaluationAmount, cashBalance 등 | TradingService.java:328-335 |
+| HoldingResponse | 개별 보유 종목 | stockCode, stockName, holdingQuantity, evaluationAmount 등 | TradingService.java:342-353 |
+| KisBalanceResponse | KIS API 응답 | Output1 (종목별), Output2 (요약) | TR_ID: VTTC8434R |
+
+### 데이터 흐름
+```
+1. 거래 설정
+   - Frontend: BotView.vue (설정 모달 → saveSettings())
+   - API: PUT /users/trade-config (UpdateTradeConfigRequest)
+   - Backend: UserService.updateTradeConfig() → user_trade_config 테이블 UPDATE
+   - Response: TradeConfigResponse
+
+2. 보유 종목 조회
+   - Frontend: BotView.vue (onMounted → loadHoldings())
+   - API: GET /trading/holdings
+   - Backend: TradingService.getHoldings() → KIS API (VTTC8434R) 호출
+   - KIS Response: KisBalanceResponse (Output1 + Output2)
+   - Mapping: mapToHoldingResponse() → HoldingResponse
+   - Response: BalanceSummaryResponse
+```
+
 ## 🤖 AI분석
 
 | 항목 | API-Server | AI-Agent | Web-App | 연동 | 비고 |
@@ -214,10 +274,31 @@
 
 ## 최종 업데이트
 
-**작성일**: 2026-05-09
+**작성일**: 2026-05-22
 **작성자**: Claude Code
 **다음 작업**: AI 분석 기능 개발
-**최근 변경사항** (거래내역 기능):
+
+**최근 변경사항** (투자 봇 BotView 기능 완료):
+- **거래 설정 관리 API 개발 및 연동 완료**
+  - GET /users/trade-config: 거래 설정 조회 (UserController.java:153-168)
+  - PUT /users/trade-config: 거래 설정 수정 (UserController.java:174-187)
+  - UserService.getTradeConfig(), updateTradeConfig() 비즈니스 로직 구현
+  - BotView.vue API 연동 (투자금액 설정, 봇 활성화 토글)
+
+- **보유 종목 조회 API 개발 및 연동 완료**
+  - GET /trading/holdings: KIS API 직접 조회 (TradingController.java:99-116)
+  - TradingService.getHoldings(): KIS API (VTTC8434R) 통합 (TradingService.java:261-354)
+  - KisBalanceResponse, HoldingResponse, BalanceSummaryResponse DTO 생성
+  - BotView.vue 보유 종목 카드 표시 (평가금액, 평가손익, 매도가능수량, 평균단가)
+
+- **BotView 화면 완전 연동**
+  - 투자 봇 상태 표시 (총 평가금액, 수익률, 활성화 상태)
+  - 투자금액 설정 및 저장 기능
+  - 설정 모달 (봇 활성화, 투자금액, 시장 선택)
+  - 보유 종목 카드 UI (AI 분석은 mock 데이터로 임시 표시)
+  - web-app/src/services/api.js: userApi.getTradeConfig(), updateTradeConfig(), tradingApi.getHoldings() 추가
+
+**이전 변경사항** (거래내역 기능):
 - **KIS API 직접 조회 방식으로 리팩토링** (데이터 정합성 보장)
 - KisDailyCcldResponse DTO 생성 (TR_ID: VTTC8001R, 최근 3개월 조회)
 - TradeHistoryResponse DTO 생성 (id, stockCode, stockName, orderType, orderStatus, etc.)
@@ -228,7 +309,7 @@
 - TransactionsView.vue 기존 연동 확인 완료 (tradingApi.getHistory())
 - 거래내역 화면 완전 연동 완료
 
-**이전 변경사항**:
+**더 이전 변경사항**:
 - user_settings 테이블 추가 및 DB 저장 기능 구현
 - 사용자 프로필 조회/수정 API 구현 (GET /users/me, PUT /users/me)
 - 로그인/인증 및 내정보 기능 100% 완료

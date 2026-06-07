@@ -35,6 +35,16 @@ databaseChangeLog:
       file: classpath:db/changelog/mvp/v1.5-user-settings.yaml
       context: mvp
 
+  # Phase 7: Stage 4 & 5 Enhancements (Safety Filter & Trade Execution)
+  - include:
+      file: classpath:db/changelog/mvp/v1.6-stage4-5-enhancements.yaml
+      context: mvp
+
+  # Phase 8: Web Display Tables (Market Summary, Realtime Price, Holdings)
+  - include:
+      file: classpath:db/changelog/mvp/v1.7-web-display-tables.yaml
+      context: mvp
+
   # ========================================
   # Product Context Changelogs (Future)
   # ========================================
