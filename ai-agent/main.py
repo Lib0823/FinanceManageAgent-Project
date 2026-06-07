@@ -1,7 +1,8 @@
 """FastAPI application for AI Agent pipeline."""
 import logging
 import sys
-from datetime import date
+import math
+from datetime import date, datetime
 from typing import Optional, List
 from contextlib import asynccontextmanager
 
@@ -26,17 +27,24 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# Global scheduler instance
+# Global instances
 scheduler: Optional[PipelineScheduler] = None
+orchestrator: Optional[PipelineOrchestrator] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan event handler for startup/shutdown."""
-    global scheduler
+    global scheduler, orchestrator
 
     # Startup
     logger.info("Starting AI Agent application...")
+
+    # Initialize orchestrator (reused for manual API calls)
+    orchestrator = PipelineOrchestrator()
+    logger.info("PipelineOrchestrator initialized (OAuth token will be cached)")
+
+    # Initialize scheduler
     scheduler = PipelineScheduler()
     scheduler.start()
     logger.info("Application started successfully")
@@ -94,7 +102,7 @@ async def trigger_pipeline_manual(
     background_tasks: BackgroundTasks
 ):
     """
-    Manually trigger Stage 1 pipeline execution.
+    Manually trigger complete pipeline execution.
 
     Args:
         request: Optional trade_date and holdings
@@ -102,10 +110,10 @@ async def trigger_pipeline_manual(
     Returns:
         Execution results
     """
-    global scheduler
+    global orchestrator
 
-    if scheduler is None:
-        raise HTTPException(status_code=500, detail="Scheduler not initialized")
+    if orchestrator is None:
+        raise HTTPException(status_code=500, detail="Orchestrator not initialized")
 
     logger.info(f"Manual trigger request received: {request.dict()}")
 
@@ -120,13 +128,36 @@ async def trigger_pipeline_manual(
                 detail=f"Invalid date format: {request.trade_date}. Use YYYY-MM-DD"
             )
 
-    # Execute pipeline
+    # Execute pipeline using global orchestrator (OAuth token cached)
     try:
-        orchestrator = PipelineOrchestrator()
-        result = await orchestrator.run_stage1_filtering(
+        result = await orchestrator.run_complete_pipeline(
             trade_date=trade_date_obj,
             holdings=request.holdings
         )
+
+        # Convert date objects and invalid float values for JSON serialization
+        def convert_dates(obj):
+            """
+            Recursively convert date/datetime objects to ISO format strings
+            and invalid float values (inf, -inf, NaN) to None.
+            """
+            # Check datetime first (subclass of date)
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            elif isinstance(obj, date):
+                return obj.isoformat()
+            elif isinstance(obj, float):
+                # Handle invalid float values
+                if math.isinf(obj) or math.isnan(obj):
+                    return None
+                return obj
+            elif isinstance(obj, dict):
+                return {k: convert_dates(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_dates(item) for item in obj]
+            return obj
+
+        result = convert_dates(result)
 
         if result['success']:
             return JSONResponse(

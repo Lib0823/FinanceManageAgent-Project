@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 
-from config.constants import FILTER_WEIGHTS, TOP_N_STOCKS
+from config.constants import FILTER_WEIGHTS, TOP_N_STOCKS, STOCK_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -88,12 +88,17 @@ class StockFilter:
         # Sort by score descending
         result_df = result_df.sort_values('final_score', ascending=False).reset_index(drop=True)
 
-        # Mark top 30 as selected
+        # Mark top 30 as selected (or all if fewer stocks available)
         result_df['is_selected'] = False
-        result_df.loc[:TOP_N_STOCKS - 1, 'is_selected'] = True
+        actual_top_n = min(TOP_N_STOCKS, len(result_df))
+        result_df.loc[:actual_top_n - 1, 'is_selected'] = True
 
         logger.info(f"Score range: {scores.min():.2f} ~ {scores.max():.2f}")
-        logger.info(f"Top 30 selected with score threshold: {result_df.loc[TOP_N_STOCKS - 1, 'final_score']:.2f}")
+        if len(result_df) >= TOP_N_STOCKS:
+            logger.info(f"Top {TOP_N_STOCKS} selected with score threshold: {result_df.loc[TOP_N_STOCKS - 1, 'final_score']:.2f}")
+        else:
+            logger.warning(f"Only {len(result_df)} stocks available (target: {TOP_N_STOCKS}), selecting all")
+            logger.info(f"Minimum score: {result_df.loc[actual_top_n - 1, 'final_score']:.2f}")
 
         return result_df
 
@@ -165,6 +170,9 @@ class StockFilter:
 
         # Filter top N (+ holdings)
         filtered_df = self.filter_top_n(scored_df, holdings=holdings)
+
+        # Add stock names
+        filtered_df['stock_name'] = filtered_df['stock_code'].map(STOCK_NAMES).fillna('Unknown')
 
         logger.info("Stock filtering completed successfully")
 

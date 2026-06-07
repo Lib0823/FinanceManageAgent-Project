@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     pipeline_timezone: str = "Asia/Seoul"
     pipeline_enabled: bool = True
 
+    # Gemini AI Configuration
+    gemini_api_key: Optional[str] = None  # Optional (not required for testing)
+
+    # DART API Configuration
+    dart_api_key: Optional[str] = None  # DART Open API key
+
     # Logging Configuration
     log_level: str = "INFO"
     log_file: str = "logs/pipeline.log"
