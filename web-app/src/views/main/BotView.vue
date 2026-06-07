@@ -1,53 +1,33 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AppHeader from '@/components/common/AppHeader.vue'
 import StockCard from '@/components/common/StockCard.vue'
+import { userApi, tradingApi } from '@/services/api'
 import { mockBotStatus, mockBotAnalysis, mockStocks } from '@/services/mockData'
+import toast from '@/utils/toast'
 
 const router = useRouter()
 
-const botEnabled = ref(mockBotStatus.enabled)
-const botStatus = ref(mockBotStatus)
+const botEnabled = ref(false)
+const botStatus = ref({
+  totalValuation: 0,
+  profitAmount: 0,  // 손익금액
+  profitPercent: 0,  // 손익률
+  totalInvestment: 0,
+  currentInvestedAmount: 0  // 현재 투자된 금액 (매입금액 합계)
+})
 
 // 보유 종목과 분석 정보를 통합
-const botStocks = ref([
-  {
-    ...mockStocks[0],
-    analysis: {
-      points: [
-        {
-          title: '지속적인 매출 성장',
-          content: 'AWS, 전자상거래, 디지털 광고 등 다양한 사업 부문에서 꾸준한 성장세를 보이고 있습니다.'
-        },
-        {
-          title: '혁신과 확장성',
-          content: 'AI, 물류 자동화 등 미래 산업에서의 혁신을 지속적으로 추진하며 장기적 성장 잠재력이 있습니다.'
-        }
-      ]
-    }
-  },
-  {
-    ...mockStocks[1],
-    analysis: {
-      points: [
-        {
-          title: '생태계 우위',
-          content: 'iPhone, Mac, iPad, 서비스의 통합 생태계로 높은 고객 충성도와 지속적인 매출을 확보하고 있습니다.'
-        },
-        {
-          title: '서비스 성장',
-          content: 'App Store, Apple Music, iCloud 등 서비스 부문의 성장으로 안정적인 반복 수익을 창출하고 있습니다.'
-        }
-      ]
-    }
-  }
-])
+const botStocks = ref([])
+
+// 종목 카드 펼침 상태 관리
+const expandedStocks = ref(new Set())
 
 // 설정 모달 관련
 const showSettingsModal = ref(false)
-const settingsBotEnabled = ref(botEnabled.value)
-const settingsInvestment = ref(botStatus.value.totalInvestment.toString())
+const settingsBotEnabled = ref(false)
+const settingsInvestment = ref('0')
 const settingsMarket = ref('domestic')
 
 const formatNumber = (num) => {
@@ -64,6 +44,75 @@ const handleAmountInput = (e) => {
   }
 }
 
+const loadTradeConfig = async () => {
+  try {
+    const response = await userApi.getTradeConfig()
+    if (response.success && response.data) {
+      botEnabled.value = response.data.isActive || false
+      botStatus.value.totalInvestment = response.data.orderAmount || 0
+    }
+  } catch (error) {
+    console.error('거래 설정 조회 실패:', error)
+    toast.error('거래 설정을 불러올 수 없습니다')
+  }
+}
+
+const loadHoldings = async () => {
+  try {
+    const response = await tradingApi.getHoldings()
+    console.log('Holdings API Response:', response)
+    if (response.success && response.data) {
+      const holdingsData = response.data
+      console.log('Holdings Data:', holdingsData)
+
+      // 총 평가금액: KIS API에서 제공하는 총 평가금액 (소수점 제거)
+      botStatus.value.totalValuation = Math.floor(holdingsData.totalEvaluationAmount || 0)
+
+      // 현재 투자금액: KIS API에서 제공하는 총 매입금액 사용 (소수점 제거)
+      botStatus.value.currentInvestedAmount = Math.floor(holdingsData.totalPurchaseAmount || 0)
+
+      // 손익금액: KIS API에서 제공하는 총 손익금액 사용 (소수점 제거)
+      botStatus.value.profitAmount = Math.floor(holdingsData.totalProfitLoss || 0)
+
+      // 손익률: KIS API에서 제공하는 총 손익률 사용 (소수점 2자리까지)
+      // Backend가 BigDecimal을 Number로 변환하므로 toFixed로 소수점 2자리까지 표시
+      const rawProfitRate = holdingsData.totalProfitLossRate || 0
+      console.log('Raw Profit Rate from API:', rawProfitRate, 'Type:', typeof rawProfitRate)
+      botStatus.value.profitPercent = Number(rawProfitRate).toFixed(2)
+
+      console.log('Holdings Data:', holdingsData)
+      console.log('Total Valuation:', botStatus.value.totalValuation)
+      console.log('Current Invested (Purchase Amount):', botStatus.value.currentInvestedAmount)
+      console.log('Total Profit Loss:', botStatus.value.profitAmount)
+      console.log('Profit Percent:', botStatus.value.profitPercent)
+
+      // 보유 종목 데이터 매핑
+      botStocks.value = holdingsData.holdings.map((holding) => ({
+        symbol: holding.stockCode,
+        name: holding.stockName,
+        currentPrice: Math.floor(holding.currentPrice || 0),  // 현재 단가 (소수점 제거)
+        profitPercent: parseFloat(holding.profitLossRate || 0).toFixed(2),
+        purchasePrice: holding.evaluationAmount,  // 평가금액
+        profit: holding.profitLoss,  // 평가손익
+        quantity: holding.availableQuantity,  // 매도가능수량
+        avgPrice: Math.floor(holding.averagePrice || 0),  // 평균단가 (소수점 제거)
+        // AI 분석은 mock 데이터 유지
+        analysis: {
+          points: [
+            {
+              title: 'AI 분석 준비 중',
+              content: '해당 종목에 대한 상세 분석이 곧 제공될 예정입니다.'
+            }
+          ]
+        }
+      }))
+    }
+  } catch (error) {
+    console.error('보유 종목 조회 실패:', error)
+    toast.error('보유 종목 정보를 불러올 수 없습니다')
+  }
+}
+
 const openSettings = () => {
   settingsBotEnabled.value = botEnabled.value
   settingsInvestment.value = formatNumber(botStatus.value.totalInvestment)
@@ -71,12 +120,64 @@ const openSettings = () => {
   showSettingsModal.value = true
 }
 
-const saveSettings = () => {
-  botEnabled.value = settingsBotEnabled.value
-  const numericValue = parseInt(settingsInvestment.value.replace(/,/g, '')) || 0
-  botStatus.value.totalInvestment = numericValue
-  showSettingsModal.value = false
+const saveSettings = async () => {
+  // Toast 공통 로직: 로딩 메시지는 표시하지 않고, 최종 결과(성공/실패)만 표시
+  // - toast.success(): 작업 성공 시
+  // - toast.error(): 작업 실패 시
+  // - toast.loading()은 사용하지 않음 (사용자 혼란 방지)
+
+  try {
+    // 쉼표 제거 후 숫자로 변환
+    const numericValue = parseInt(settingsInvestment.value.replace(/,/g, '')) || 0
+
+    console.log('저장 요청:', {
+      orderAmount: numericValue,
+      isActive: settingsBotEnabled.value
+    })
+
+    const response = await userApi.updateTradeConfig({
+      orderAmount: numericValue,
+      maxHoldings: 10,  // 기본값 유지
+      orderType: 'market',  // 기본값 유지
+      isActive: settingsBotEnabled.value
+    })
+
+    console.log('API 응답:', response)
+
+    // API 응답 성공 여부 확인
+    // 백엔드 응답 구조: { success: boolean, message: string, data: TradeConfigResponse }
+    // api.js interceptor가 response.data를 리턴하므로 위 전체 구조를 받음
+    if (response && response.success && response.data) {
+      // 로컬 상태 업데이트 (응답 데이터 사용)
+      botEnabled.value = response.data.isActive
+      botStatus.value.totalInvestment = response.data.orderAmount
+      showSettingsModal.value = false
+
+      // 최종 성공 메시지만 표시
+      toast.success('설정이 저장되었습니다')
+    } else {
+      // API 응답 실패 또는 유효하지 않은 응답
+      console.error('API 응답 실패:', response)
+      toast.error('설정 저장에 실패했습니다')
+    }
+  } catch (error) {
+    // 네트워크 오류 또는 예외 발생 시
+    console.error('거래 설정 저장 실패:', error)
+    console.error('Error details:', {
+      message: error.message,
+      response: error.response?.data,
+      status: error.response?.status
+    })
+
+    // 최종 실패 메시지만 표시
+    toast.error('설정 저장에 실패했습니다')
+  }
 }
+
+onMounted(async () => {
+  await loadTradeConfig()
+  await loadHoldings()
+})
 
 const goToNews = (stock) => {
   router.push(`/news?symbol=${stock.symbol}`)
@@ -93,6 +194,20 @@ const goToInfo = (stock) => {
 const goToMarketAnalysis = () => {
   router.push('/market-analysis')
 }
+
+const toggleStockDetails = (symbol) => {
+  if (expandedStocks.value.has(symbol)) {
+    expandedStocks.value.delete(symbol)
+  } else {
+    expandedStocks.value.add(symbol)
+  }
+  // Trigger reactivity
+  expandedStocks.value = new Set(expandedStocks.value)
+}
+
+const isStockExpanded = (symbol) => {
+  return expandedStocks.value.has(symbol)
+}
 </script>
 
 <template>
@@ -100,15 +215,21 @@ const goToMarketAnalysis = () => {
     <AppHeader title="투자 봇" showIcon icon="bot" />
 
     <div class="content">
-      <!-- Bot Status -->
-      <div class="bot-status">
-        <div class="status-info">
-          <span class="status-label">전체 평가금액</span>
-          <div class="status-value">
-            <span class="amount">{{ formatNumber(botStatus.totalValuation) }}</span>
-            <span class="percent">({{ botStatus.profitPercent }}%)</span>
-          </div>
+      <!-- Total Valuation Section -->
+      <div class="total-valuation-section">
+        <div class="valuation-label">총 평가금액</div>
+        <div class="valuation-amount">{{ formatNumber(botStatus.totalValuation) }}원</div>
+        <div
+          class="valuation-profit"
+          :class="botStatus.profitAmount >= 0 ? 'profit-up' : 'profit-down'"
+        >
+          {{ botStatus.profitAmount >= 0 ? '+' : '' }}{{ formatNumber(botStatus.profitAmount) }}원
+          ({{ parseFloat(botStatus.profitPercent) >= 0 ? '+' : '' }}{{ botStatus.profitPercent }}%)
         </div>
+      </div>
+
+      <!-- Bot Avatar & Status -->
+      <div class="bot-status">
         <div class="bot-avatar-wrapper">
           <div class="bot-avatar">
             <svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
@@ -196,21 +317,32 @@ const goToMarketAnalysis = () => {
               <circle cx="155" cy="170" r="10" fill="#334155"/>
             </svg>
           </div>
-          <div class="bot-status-badge" :class="{ active: botEnabled }">
-            <div class="status-indicator"></div>
-            <span class="status-text">{{ botEnabled ? '일하는 중' : '대기 중' }}</span>
-          </div>
+        </div>
+
+        <!-- Status Badge -->
+        <div class="bot-status-badge" :class="{ active: botEnabled }">
+          <div class="status-indicator"></div>
+          <span class="status-text">{{ botEnabled ? '트레이딩 중' : '쉬는 중' }}</span>
         </div>
       </div>
 
-      <!-- Investment Info -->
+      <!-- Investment Section -->
       <div class="investment-section">
-        <div class="investment-row">
-          <span class="investment-label">투자 금액</span>
-          <span class="investment-value">{{ formatNumber(botStatus.totalInvestment) }}원</span>
+        <div class="investment-info">
+          <div class="investment-main">
+            <div class="investment-item">
+              <span class="investment-label">최대 투자 금액</span>
+              <span class="investment-value">{{ formatNumber(botStatus.totalInvestment) }}원</span>
+            </div>
+            <div class="investment-divider"></div>
+            <div class="investment-item">
+              <span class="investment-label">현재 투자금액</span>
+              <span class="investment-value">{{ formatNumber(botStatus.currentInvestedAmount) }}원</span>
+            </div>
+          </div>
         </div>
         <button class="settings-btn" @click="openSettings">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M12 15C13.6569 15 15 13.6569 15 12C15 10.3431 13.6569 9 12 9C10.3431 9 9 10.3431 9 12C9 13.6569 10.3431 15 12 15Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
             <path d="M19.4 15C19.2669 15.3016 19.2272 15.6362 19.286 15.9606C19.3448 16.285 19.4995 16.5843 19.73 16.82L19.79 16.88C19.976 17.0657 20.1235 17.2863 20.2241 17.5291C20.3248 17.7719 20.3766 18.0322 20.3766 18.295C20.3766 18.5578 20.3248 18.8181 20.2241 19.0609C20.1235 19.3037 19.976 19.5243 19.79 19.71C19.6043 19.896 19.3837 20.0435 19.1409 20.1441C18.8981 20.2448 18.6378 20.2966 18.375 20.2966C18.1122 20.2966 17.8519 20.2448 17.6091 20.1441C17.3663 20.0435 17.1457 19.896 16.96 19.71L16.9 19.65C16.6643 19.4195 16.365 19.2648 16.0406 19.206C15.7162 19.1472 15.3816 19.1869 15.08 19.32C14.7842 19.4468 14.532 19.6572 14.3543 19.9255C14.1766 20.1938 14.0813 20.5082 14.08 20.83V21C14.08 21.5304 13.8693 22.0391 13.4942 22.4142C13.1191 22.7893 12.6104 23 12.08 23C11.5496 23 11.0409 22.7893 10.6658 22.4142C10.2907 22.0391 10.08 21.5304 10.08 21V20.91C10.0723 20.579 9.96512 20.258 9.77251 19.9887C9.5799 19.7194 9.31074 19.5143 9 19.4C8.69838 19.2669 8.36381 19.2272 8.03941 19.286C7.71502 19.3448 7.41568 19.4995 7.18 19.73L7.12 19.79C6.93425 19.976 6.71368 20.1235 6.47088 20.2241C6.22808 20.3248 5.96783 20.3766 5.705 20.3766C5.44217 20.3766 5.18192 20.3248 4.93912 20.2241C4.69632 20.1235 4.47575 19.976 4.29 19.79C4.10405 19.6043 3.95653 19.3837 3.85588 19.1409C3.75523 18.8981 3.70343 18.6378 3.70343 18.375C3.70343 18.1122 3.75523 17.8519 3.85588 17.6091C3.95653 17.3663 4.10405 17.1457 4.29 16.96L4.35 16.9C4.58054 16.6643 4.73519 16.365 4.794 16.0406C4.85282 15.7162 4.81312 15.3816 4.68 15.08C4.55324 14.7842 4.34276 14.532 4.07447 14.3543C3.80618 14.1766 3.49179 14.0813 3.17 14.08H3C2.46957 14.08 1.96086 13.8693 1.58579 13.4942C1.21071 13.1191 1 12.6104 1 12.08C1 11.5496 1.21071 11.0409 1.58579 10.6658C1.96086 10.2907 2.46957 10.08 3 10.08H3.09C3.42099 10.0723 3.742 9.96512 4.0113 9.77251C4.28059 9.5799 4.48572 9.31074 4.6 9C4.73312 8.69838 4.77282 8.36381 4.714 8.03941C4.65519 7.71502 4.50054 7.41568 4.27 7.18L4.21 7.12C4.02405 6.93425 3.87653 6.71368 3.77588 6.47088C3.67523 6.22808 3.62343 5.96783 3.62343 5.705C3.62343 5.44217 3.67523 5.18192 3.77588 4.93912C3.87653 4.69632 4.02405 4.47575 4.21 4.29C4.39575 4.10405 4.61632 3.95653 4.85912 3.85588C5.10192 3.75523 5.36217 3.70343 5.625 3.70343C5.88783 3.70343 6.14808 3.75523 6.39088 3.85588C6.63368 3.95653 6.85425 4.10405 7.04 4.29L7.1 4.35C7.33568 4.58054 7.63502 4.73519 7.95941 4.794C8.28381 4.85282 8.61838 4.81312 8.92 4.68H9C9.29577 4.55324 9.54802 4.34276 9.72569 4.07447C9.90337 3.80618 9.99872 3.49179 10 3.17V3C10 2.46957 10.2107 1.96086 10.5858 1.58579C10.9609 1.21071 11.4696 1 12 1C12.5304 1 13.0391 1.21071 13.4142 1.58579C13.7893 1.96086 14 2.46957 14 3V3.09C14.0013 3.41179 14.0966 3.72618 14.2743 3.99447C14.452 4.26276 14.7042 4.47324 15 4.6C15.3016 4.73312 15.6362 4.77282 15.9606 4.714C16.285 4.65519 16.5843 4.50054 16.82 4.27L16.88 4.21C17.0657 4.02405 17.2863 3.87653 17.5291 3.77588C17.7719 3.67523 18.0322 3.62343 18.295 3.62343C18.5578 3.62343 18.8181 3.67523 19.0609 3.77588C19.3037 3.87653 19.5243 4.02405 19.71 4.21C19.896 4.39575 20.0435 4.61632 20.1441 4.85912C20.2448 5.10192 20.2966 5.36217 20.2966 5.625C20.2966 5.88783 20.2448 6.14808 20.1441 6.39088C20.0435 6.63368 19.896 6.85425 19.71 7.04L19.65 7.1C19.4195 7.33568 19.2648 7.63502 19.206 7.95941C19.1472 8.28381 19.1869 8.61838 19.32 8.92V9C19.4468 9.29577 19.6572 9.54802 19.9255 9.72569C20.1938 9.90337 20.5082 9.99872 20.83 10H21C21.5304 10 22.0391 10.2107 22.4142 10.5858C22.7893 10.9609 23 11.4696 23 12C23 12.5304 22.7893 13.0391 22.4142 13.4142C22.0391 13.7893 21.5304 14 21 14H20.91C20.5882 14.0013 20.2738 14.0966 20.0055 14.2743C19.7372 14.452 19.5268 14.7042 19.4 15Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
@@ -244,8 +376,8 @@ const goToMarketAnalysis = () => {
         <h3 class="section-title">보유 종목 및 분석</h3>
 
         <div v-for="stock in botStocks" :key="stock.symbol" class="stock-analysis-card">
-          <!-- Stock Info Header -->
-          <div class="stock-header">
+          <!-- Stock Info Header (Clickable) -->
+          <div class="stock-header" @click="toggleStockDetails(stock.symbol)">
             <div class="stock-logo">
               <img v-if="stock.logo" :src="stock.logo" :alt="stock.name" />
               <div v-else class="logo-placeholder">{{ stock.symbol?.charAt(0) }}</div>
@@ -256,37 +388,45 @@ const goToMarketAnalysis = () => {
                 <span class="stock-symbol">{{ stock.symbol }}</span>
               </div>
               <div class="stock-price-row">
-                <span class="current-price">₩{{ formatNumber(stock.currentPrice) }}</span>
+                <span class="current-price">₩{{ formatNumber(stock.purchasePrice) }}</span>
                 <span class="profit-badge" :class="stock.profitPercent >= 0 ? 'positive' : 'negative'">
                   {{ stock.profitPercent >= 0 ? '+' : '' }}{{ stock.profitPercent }}%
                 </span>
               </div>
             </div>
-          </div>
-
-          <!-- Stock Details -->
-          <div class="stock-details">
-            <div class="detail-item">
-              <span class="detail-label">평가금액</span>
-              <span class="detail-value">{{ formatNumber(stock.purchasePrice) }}원</span>
-            </div>
-            <div class="detail-item">
-              <span class="detail-label">평가손익</span>
-              <span class="detail-value profit" :class="stock.profit >= 0 ? 'positive' : 'negative'">
-                {{ stock.profit >= 0 ? '+' : '' }}{{ formatNumber(stock.profit) }}원
-              </span>
-            </div>
-            <div class="detail-item">
-              <span class="detail-label">매도 가능 수량</span>
-              <span class="detail-value">{{ formatNumber(stock.quantity) }}주</span>
-            </div>
-            <div class="detail-item">
-              <span class="detail-label">평균단가</span>
-              <span class="detail-value">{{ formatNumber(stock.avgPrice) }}원</span>
+            <!-- Expand/Collapse Icon -->
+            <div class="expand-icon" :class="{ expanded: isStockExpanded(stock.symbol) }">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M19 9l-7 7-7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
             </div>
           </div>
 
-          <!-- Analysis Section -->
+          <!-- Stock Details (Collapsible) -->
+          <transition name="slide-fade">
+            <div v-if="isStockExpanded(stock.symbol)" class="stock-details">
+              <div class="detail-item">
+                <span class="detail-label">현재 단가</span>
+                <span class="detail-value">{{ formatNumber(stock.currentPrice) }}원</span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">평가손익</span>
+                <span class="detail-value profit" :class="stock.profit >= 0 ? 'positive' : 'negative'">
+                  {{ stock.profit >= 0 ? '+' : '' }}{{ formatNumber(stock.profit) }}원
+                </span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">매도 가능 수량</span>
+                <span class="detail-value">{{ formatNumber(stock.quantity) }}주</span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">평균단가</span>
+                <span class="detail-value">{{ formatNumber(stock.avgPrice) }}원</span>
+              </div>
+            </div>
+          </transition>
+
+          <!-- Analysis Section (Always Visible) -->
           <div class="analysis-section">
             <div class="analysis-header">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -359,7 +499,7 @@ const goToMarketAnalysis = () => {
 
         <!-- Investment Amount -->
         <div class="setting-item">
-          <label class="setting-label">투자 금액</label>
+          <label class="setting-label">최대 투자 금액</label>
           <div class="input-wrapper">
             <input
               type="text"
@@ -422,8 +562,7 @@ const goToMarketAnalysis = () => {
   flex-direction: column;
   align-items: center;
   gap: var(--spacing-md);
-  margin-bottom: var(--spacing-xl);
-  margin-top: var(--spacing-lg);
+  margin-bottom: var(--spacing-lg);
 }
 
 .bot-avatar-wrapper {
@@ -520,17 +659,71 @@ const goToMarketAnalysis = () => {
   font-size: var(--font-size-2xl);
   font-weight: var(--font-weight-bold);
   color: var(--color-primary);
+  transition: color 0.3s ease;
+}
+
+.amount.profit-up {
+  color: var(--color-stock-up);
+}
+
+.amount.profit-down {
+  color: var(--color-stock-down);
 }
 
 .percent {
   font-size: var(--font-size-base);
   color: var(--color-text-secondary);
+  transition: color 0.3s ease;
+}
+
+.percent.profit-up {
+  color: var(--color-stock-up);
+}
+
+.percent.profit-down {
+  color: var(--color-stock-down);
+}
+
+.total-valuation-section {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin-top: var(--spacing-lg);
+  margin-bottom: var(--spacing-lg);
+}
+
+.valuation-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  font-weight: var(--font-weight-medium);
+}
+
+.valuation-amount {
+  font-size: 24px;
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+  letter-spacing: -0.5px;
+}
+
+.valuation-profit {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.valuation-profit.profit-up {
+  color: var(--color-stock-up);
+}
+
+.valuation-profit.profit-down {
+  color: var(--color-stock-down);
 }
 
 .investment-section {
   background: var(--color-bg-secondary);
-  border-radius: var(--radius-xl);
-  padding: var(--spacing-lg);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-md);
   margin-bottom: var(--spacing-lg);
   display: flex;
   align-items: center;
@@ -538,21 +731,39 @@ const goToMarketAnalysis = () => {
   gap: var(--spacing-md);
 }
 
-.investment-row {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-xs);
+.investment-info {
   flex: 1;
 }
 
+.investment-main {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--spacing-lg);
+}
+
+.investment-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.investment-divider {
+  width: 1px;
+  height: 32px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
 .investment-label {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
 }
 
 .investment-value {
-  font-size: var(--font-size-xl);
-  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
   color: var(--color-text-primary);
 }
 
@@ -617,8 +828,21 @@ const goToMarketAnalysis = () => {
   display: flex;
   gap: var(--spacing-md);
   align-items: center;
-  padding-bottom: var(--spacing-md);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding: var(--spacing-sm);
+  margin: calc(var(--spacing-sm) * -1);
+  margin-bottom: var(--spacing-md);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background 0.2s ease;
+  position: relative;
+}
+
+.stock-header:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.stock-header:active {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .stock-logo {
@@ -662,7 +886,7 @@ const goToMarketAnalysis = () => {
 }
 
 .stock-name {
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-base);
   font-weight: var(--font-weight-bold);
   color: var(--color-text-primary);
 }
@@ -680,7 +904,7 @@ const goToMarketAnalysis = () => {
 }
 
 .current-price {
-  font-size: var(--font-size-xl);
+  font-size: var(--font-size-lg);
   font-weight: var(--font-weight-bold);
   color: var(--color-text-primary);
 }
@@ -700,6 +924,29 @@ const goToMarketAnalysis = () => {
 .profit-badge.negative {
   background: rgba(239, 68, 68, 0.2);
   color: var(--color-stock-down);
+}
+
+/* Expand Icon */
+.expand-icon {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-tertiary);
+  transition: transform 0.3s ease, color 0.2s ease;
+}
+
+.expand-icon:hover {
+  color: var(--color-text-secondary);
+}
+
+.expand-icon.expanded {
+  transform: rotate(180deg);
+}
+
+.expand-icon svg {
+  width: 20px;
+  height: 20px;
 }
 
 /* Stock Details */
@@ -1097,5 +1344,24 @@ const goToMarketAnalysis = () => {
   flex-shrink: 0;
   display: flex;
   align-items: center;
+}
+
+/* Transition Animations */
+.slide-fade-enter-active {
+  transition: all 0.3s ease-out;
+}
+
+.slide-fade-leave-active {
+  transition: all 0.3s ease-in;
+}
+
+.slide-fade-enter-from {
+  transform: translateY(-10px);
+  opacity: 0;
+}
+
+.slide-fade-leave-to {
+  transform: translateY(-10px);
+  opacity: 0;
 }
 </style>

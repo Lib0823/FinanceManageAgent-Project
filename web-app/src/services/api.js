@@ -181,7 +181,9 @@ export const botApi = {
 export const marketAnalysisApi = {
   getSummary: (date) => api.get('/market/summary', { params: date ? { date } : {} }),
   getSentiment: (date) => api.get('/market/sentiment', { params: date ? { date } : {} }),
-  getDecisions: (date) => api.get('/market/decisions', { params: date ? { date } : {} })
+  getDecisions: (date) => api.get('/market/decisions', { params: date ? { date } : {} }),
+  getLatestDate: () => api.get('/market/latest-date'),
+  getHeatmap: (date) => api.get('/market/heatmap', { params: date ? { date } : {} })
 }
 
 export default api

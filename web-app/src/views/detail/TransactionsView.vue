@@ -260,7 +260,6 @@ const getTypeLabel = (type) => {
             <div class="summary-item">
               <span class="summary-type other">기타</span>
               <span class="summary-amount">{{ formatNumber(summary.other.amount) }}</span>
-              <span class="summary-detail">{{ summary.other.label }}</span>
             </div>
           </div>
         </div>
