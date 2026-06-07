@@ -2,6 +2,215 @@
 
 AI 파이프라인 Stage 2 (분석 단계)의 `news_analysis`와 `prophet_forecast` 테이블 저장 구현 문서.
 
+## 파이프라인 분석 데이터 테이블 현황
+
+### Stage별 데이터 흐름
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ Stage 1: Stock Filtering (KOSPI 100 → Top 30)                   │
+│ 테이블: stock_filter_score                                       │
+│ 저장: 매일 30개 종목 × 5개 지표                                  │
+└──────────────────────────────────────────────────────────────────┘
+                              ↓
+┌──────────────────────────────────────────────────────────────────┐
+│ Stage 2-1: Quantitative Analysis                                │
+│ 테이블: stock_filter_score (UPDATE)                             │
+│ 저장: 30개 종목 × 2개 추가 컬럼 (morning_return, close_position) │
+└──────────────────────────────────────────────────────────────────┘
+                              ↓
+┌──────────────────────────────────────────────────────────────────┐
+│ Stage 2-2: Sentiment Analysis (KR-FinBERT)                      │
+│ 테이블: news_analysis                                            │
+│ 저장: 매일 30개 종목 × 감성점수                                  │
+└──────────────────────────────────────────────────────────────────┘
+                              ↓
+┌──────────────────────────────────────────────────────────────────┐
+│ Stage 2-3: Time-Series Forecasting (Prophet)                    │
+│ 테이블: prophet_forecast                                         │
+│ 저장: 매일 30개 종목 × D+1~D+5 예측 + 추세 피처                 │
+└──────────────────────────────────────────────────────────────────┘
+                              ↓
+┌──────────────────────────────────────────────────────────────────┐
+│ Stage 4: AI Decision (Gemini)                                   │
+│ 테이블: ai_trade_decision                                        │
+│ 저장: 매일 TOP3 매수 + TOP3 매도 (6개 레코드)                    │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### 테이블별 상세 정보
+
+| 테이블명 | Stage | 용도 | 주요 컬럼 | 저장 주기 | 레코드 수/일 |
+|---------|-------|------|-----------|----------|--------------|
+| **stock_filter_score** | 1, 2-1 | 종목 필터링 점수 + 정량 피처 | `stock_code`, `score_date`, `scaler_score`, `is_selected`, `morning_return`, `close_position` | 매일 | 30개 |
+| **news_analysis** | 2-2 | 뉴스 감성 분석 결과 | `stock_code`, `analysis_date`, `sentiment_score`, `news_count` | 매일 | 30개 |
+| **prophet_forecast** | 2-3 | Prophet 시계열 예측 | `stock_code`, `forecast_date`, `yhat_d1~d5`, `price_trend`, `volume_trend`, `price_uncertainty` | 매일 | 30개 |
+| **ai_trade_decision** | 4 | Gemini AI 매매 결정 | `stock_code`, `trade_date`, `decision_type` (BUY/SELL), `reason`, `rank` | 매일 | 6개 (TOP3×2) |
+
+### API 서버 연동 가이드
+
+#### 1. stock_filter_score (Stage 1 + 2-1)
+
+**데이터 구조:**
+```sql
+CREATE TABLE stock_filter_score (
+    id BIGSERIAL PRIMARY KEY,
+    stock_code VARCHAR(10) NOT NULL,
+    stock_name VARCHAR(50) NOT NULL,
+    score_date DATE NOT NULL,
+
+    -- Stage 1: 필터링 지표 (KIS API)
+    foreign_net_buy BIGINT NOT NULL,
+    institutional_net_buy BIGINT NOT NULL,
+    vol_avg_multiple NUMERIC(10, 2) NOT NULL,
+    price_volatility NUMERIC(10, 4) NOT NULL,
+    scaler_score NUMERIC(10, 4) NOT NULL,
+    is_selected BOOLEAN NOT NULL,
+
+    -- Stage 2-1: 정량 피처 (KIS API)
+    morning_return NUMERIC(10, 4),
+    close_position NUMERIC(5, 4),
+
+    created_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+**API 활용:**
+- `GET /api/stocks/filtered?date=2026-06-07` → Top 30 종목 조회
+- `GET /api/analysis/quantitative?stock_code=005930&date=2026-06-07` → 정량 지표 조회
+
+**Gemini 입력 피처:** `morning_return`, `close_position`
+
+---
+
+#### 2. news_analysis (Stage 2-2)
+
+**데이터 구조:**
+```sql
+CREATE TABLE news_analysis (
+    stock_code VARCHAR(10) NOT NULL,
+    analysis_date DATE NOT NULL,
+    sentiment_score NUMERIC(5, 4) NOT NULL,  -- -1.0000 ~ 1.0000
+    news_count INT NOT NULL,
+    PRIMARY KEY (stock_code, analysis_date)
+);
+```
+
+**API 활용:**
+- `GET /api/analysis/sentiment?date=2026-06-07` → 30개 종목 감성점수
+- `GET /api/analysis/sentiment/{stock_code}?date=2026-06-07` → 특정 종목 감성
+
+**Gemini 입력 피처:** `sentiment_score`
+
+---
+
+#### 3. prophet_forecast (Stage 2-3)
+
+**데이터 구조:**
+```sql
+CREATE TABLE prophet_forecast (
+    stock_code VARCHAR(10) NOT NULL,
+    stock_name VARCHAR(50),
+    forecast_date DATE NOT NULL,
+
+    -- D+1 ~ D+5 예측값
+    yhat_d1 NUMERIC(12, 2),
+    yhat_d2 NUMERIC(12, 2),
+    yhat_d3 NUMERIC(12, 2),
+    yhat_d4 NUMERIC(12, 2),
+    yhat_d5 NUMERIC(12, 2),
+
+    -- 신뢰구간 상한
+    yhat_upper_d1 NUMERIC(12, 2),
+    yhat_upper_d2 NUMERIC(12, 2),
+    yhat_upper_d3 NUMERIC(12, 2),
+    yhat_upper_d4 NUMERIC(12, 2),
+    yhat_upper_d5 NUMERIC(12, 2),
+
+    -- 신뢰구간 하한
+    yhat_lower_d1 NUMERIC(12, 2),
+    yhat_lower_d2 NUMERIC(12, 2),
+    yhat_lower_d3 NUMERIC(12, 2),
+    yhat_lower_d4 NUMERIC(12, 2),
+    yhat_lower_d5 NUMERIC(12, 2),
+
+    -- Gemini AI 입력 피처 (추세 요약)
+    price_trend NUMERIC(12, 6),        -- D+1~D+5 가격 추세 기울기
+    volume_trend NUMERIC(12, 6),       -- D+1~D+5 거래량 추세 기울기
+    price_uncertainty NUMERIC(10, 2),  -- 예측 불확실성 (신뢰구간 평균)
+
+    created_at TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (stock_code, forecast_date)
+);
+```
+
+**API 활용:**
+- `GET /api/analysis/forecast?date=2026-06-07` → 30개 종목 예측
+- `GET /api/analysis/forecast/{stock_code}?date=2026-06-07` → 차트용 D+1~D+5 데이터
+
+**Gemini 입력 피처:** `price_trend`, `volume_trend`, `price_uncertainty`
+
+**웹 차트 활용:**
+- `yhat_d1~d5`: 예측 가격 라인
+- `yhat_upper_d1~d5`: 신뢰구간 상한 (area fill)
+- `yhat_lower_d1~d5`: 신뢰구간 하한 (area fill)
+
+---
+
+#### 4. ai_trade_decision (Stage 4)
+
+**데이터 구조:**
+```sql
+CREATE TABLE ai_trade_decision (
+    id SERIAL PRIMARY KEY,
+    stock_code VARCHAR(10) NOT NULL,
+    trade_date DATE NOT NULL,
+    decision_type VARCHAR(4) NOT NULL,  -- 'BUY' or 'SELL'
+    reason TEXT NOT NULL,
+    rank INT NOT NULL,                  -- 1, 2, 3 (TOP3)
+    created_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+**API 활용:**
+- `GET /api/ai/decisions?date=2026-06-07` → 당일 AI 결정 (6개)
+- `GET /api/ai/decisions/buy?date=2026-06-07` → TOP3 매수 추천
+- `GET /api/ai/decisions/sell?date=2026-06-07` → TOP3 매도 추천
+
+**응답 예시:**
+```json
+{
+  "buy_top3": [
+    {
+      "stock_code": "005930",
+      "rank": 1,
+      "reason": "외국인·기관 동시 순매수 + 가격 상승 추세 + 긍정 뉴스"
+    }
+  ],
+  "sell_top3": [...]
+}
+```
+
+---
+
+### Gemini AI 입력 피처 요약 (11개)
+
+| 피처명 | 출처 테이블 | 타입 | 설명 |
+|--------|------------|------|------|
+| `morning_return` | stock_filter_score | NUMERIC(10, 4) | 장초반 수익률 (09:00~10:00) |
+| `close_position` | stock_filter_score | NUMERIC(5, 4) | 종가 위치 (고저 범위 내) |
+| `foreign_net_buy` | stock_filter_score | BIGINT | 외국인 순매수 (원) |
+| `institutional_net_buy` | stock_filter_score | BIGINT | 기관 순매수 (원) |
+| `per` | stock_financial (DART) | NUMERIC | 주가수익비율 |
+| `roe` | stock_financial (DART) | NUMERIC | 자기자본이익률 (%) |
+| `operating_margin` | stock_financial (DART) | NUMERIC | 영업이익률 (%) |
+| `sentiment_score` | news_analysis | NUMERIC(5, 4) | 뉴스 감성점수 (-1.0 ~ 1.0) |
+| `price_trend` | prophet_forecast | NUMERIC(12, 6) | D+1~D+5 가격 추세 |
+| `volume_trend` | prophet_forecast | NUMERIC(12, 6) | D+1~D+5 거래량 추세 |
+| `price_uncertainty` | prophet_forecast | NUMERIC(10, 2) | 예측 불확실성 |
+
+---
+
 ## 시스템 개요
 
 파이프라인은 매일 30개 종목에 대한 감성 분석과 시계열 예측을 수행하며, 결과를 PostgreSQL 데이터베이스에 저장합니다.
