@@ -1,8 +1,6 @@
 package com.inbeom.apiserver.service;
 
-import com.inbeom.apiserver.dto.market.MarketDecisionsResponse;
-import com.inbeom.apiserver.dto.market.MarketSentimentResponse;
-import com.inbeom.apiserver.dto.market.MarketSummaryResponse;
+import com.inbeom.apiserver.dto.market.*;
 import com.inbeom.apiserver.repository.MarketAnalysisRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -207,6 +205,61 @@ public class MarketAnalysisService {
             return "부정 우세";
         } else {
             return "중립";
+        }
+    }
+
+    /**
+     * 최신 분석 날짜 조회
+     */
+    @Transactional(readOnly = true)
+    public LatestDateResponse getLatestAnalysisDate() {
+        try {
+            LocalDate latestDate = marketAnalysisRepository.getLatestAnalysisDate();
+            return LatestDateResponse.builder()
+                    .latestDate(latestDate)
+                    .build();
+        } catch (Exception e) {
+            log.error("Failed to get latest analysis date", e);
+            throw new RuntimeException("Failed to get latest analysis date", e);
+        }
+    }
+
+    /**
+     * 30종목 히트맵 데이터 조회
+     */
+    @Transactional(readOnly = true)
+    public MarketHeatmapResponse getHeatmapData(LocalDate date) {
+        try {
+            List<Map<String, Object>> heatmapData = marketAnalysisRepository.getHeatmapData(date);
+
+            List<MarketHeatmapResponse.StockFeatures> stocks = new ArrayList<>();
+            for (Map<String, Object> row : heatmapData) {
+                stocks.add(MarketHeatmapResponse.StockFeatures.builder()
+                        .stockCode((String) row.get("stock_code"))
+                        .stockName((String) row.get("stock_name"))
+                        .foreignNetBuy((Long) row.get("foreign_net_buy"))
+                        .institutionalNetBuy((Long) row.get("institutional_net_buy"))
+                        .volAvgMultiple((BigDecimal) row.get("vol_avg_multiple"))
+                        .priceVolatility((BigDecimal) row.get("price_volatility"))
+                        .morningReturn((BigDecimal) row.get("morning_return"))
+                        .closePosition((BigDecimal) row.get("close_position"))
+                        .per((BigDecimal) row.get("per"))
+                        .roe((BigDecimal) row.get("roe"))
+                        .operatingMargin((BigDecimal) row.get("operating_margin"))
+                        .sentimentScore((BigDecimal) row.get("sentiment_score"))
+                        .priceTrend((BigDecimal) row.get("price_trend"))
+                        .volumeTrend((BigDecimal) row.get("volume_trend"))
+                        .priceUncertainty((BigDecimal) row.get("price_uncertainty"))
+                        .build());
+            }
+
+            return MarketHeatmapResponse.builder()
+                    .date(date)
+                    .stocks(stocks)
+                    .build();
+        } catch (Exception e) {
+            log.error("Failed to get heatmap data for date: {}", date, e);
+            throw new RuntimeException("Failed to get heatmap data", e);
         }
     }
 }

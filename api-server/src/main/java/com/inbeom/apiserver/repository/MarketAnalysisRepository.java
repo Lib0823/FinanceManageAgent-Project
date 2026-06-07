@@ -132,4 +132,70 @@ public class MarketAnalysisRepository {
 
         return jdbcTemplate.queryForList(sql, date, decisionType);
     }
+
+    /**
+     * 최신 분석 날짜 조회
+     * stock_filter_score, ai_trade_decision, news_analysis 중 가장 최신 날짜 반환
+     */
+    public LocalDate getLatestAnalysisDate() {
+        String sql = """
+            SELECT COALESCE(
+                (SELECT MAX(score_date) FROM stock_filter_score WHERE is_selected = true),
+                (SELECT MAX(decision_date) FROM ai_trade_decision),
+                (SELECT MAX(analysis_date) FROM news_analysis WHERE stock_code IS NOT NULL),
+                CURRENT_DATE
+            ) as latest_date
+            """;
+
+        return jdbcTemplate.queryForObject(sql, LocalDate.class);
+    }
+
+    /**
+     * 30종목 히트맵 데이터 조회 (11개 피처)
+     */
+    public List<Map<String, Object>> getHeatmapData(LocalDate date) {
+        String sql = """
+            SELECT
+                sfs.stock_code,
+                sfs.stock_name,
+                sfs.score_date,
+                -- Stage 1 필터링 지표
+                sfs.foreign_net_buy,
+                sfs.institutional_net_buy,
+                sfs.vol_avg_multiple,
+                sfs.price_volatility,
+                -- Stage 2-1 정량 지표
+                sfs.morning_return,
+                sfs.close_position,
+                -- DART 재무 지표
+                sf.per,
+                sf.roe,
+                sf.operating_margin,
+                -- Stage 2-2 감성 지표
+                na.sentiment_score,
+                -- Stage 2-3 시계열 지표
+                pf.price_trend,
+                pf.volume_trend,
+                pf.price_uncertainty
+            FROM stock_filter_score sfs
+            LEFT JOIN stock_financial sf
+                ON sfs.stock_code = sf.stock_code
+                AND sf.base_date = (
+                    SELECT MAX(base_date)
+                    FROM stock_financial sf2
+                    WHERE sf2.stock_code = sfs.stock_code
+                )
+            LEFT JOIN news_analysis na
+                ON sfs.stock_code = na.stock_code
+                AND sfs.score_date = na.analysis_date
+            LEFT JOIN prophet_forecast pf
+                ON sfs.stock_code = pf.stock_code
+                AND sfs.score_date = pf.forecast_date
+            WHERE sfs.score_date = ?
+                AND sfs.is_selected = TRUE
+            ORDER BY sfs.scaler_score DESC
+            """;
+
+        return jdbcTemplate.queryForList(sql, date);
+    }
 }

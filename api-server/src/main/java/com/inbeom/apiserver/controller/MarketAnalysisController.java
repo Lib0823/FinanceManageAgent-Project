@@ -1,9 +1,7 @@
 package com.inbeom.apiserver.controller;
 
 import com.inbeom.apiserver.dto.common.ApiResponse;
-import com.inbeom.apiserver.dto.market.MarketDecisionsResponse;
-import com.inbeom.apiserver.dto.market.MarketSentimentResponse;
-import com.inbeom.apiserver.dto.market.MarketSummaryResponse;
+import com.inbeom.apiserver.dto.market.*;
 import com.inbeom.apiserver.service.MarketAnalysisService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -65,6 +63,35 @@ public class MarketAnalysisController {
 
         LocalDate targetDate = date != null ? date : LocalDate.now();
         MarketDecisionsResponse response = marketAnalysisService.getMarketDecisions(targetDate);
+
+        return ResponseEntity.ok(ApiResponse.success(response));
+    }
+
+    /**
+     * 최신 분석 날짜 조회
+     * GET /api/market/latest-date
+     */
+    @GetMapping("/latest-date")
+    public ResponseEntity<ApiResponse<LatestDateResponse>> getLatestAnalysisDate() {
+        log.info("GET /api/market/latest-date");
+
+        LatestDateResponse response = marketAnalysisService.getLatestAnalysisDate();
+
+        return ResponseEntity.ok(ApiResponse.success(response));
+    }
+
+    /**
+     * 30종목 히트맵 데이터 조회
+     * GET /api/market/heatmap?date=2025-05-27
+     */
+    @GetMapping("/heatmap")
+    public ResponseEntity<ApiResponse<MarketHeatmapResponse>> getHeatmapData(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
+    ) {
+        log.info("GET /api/market/heatmap - date: {}", date);
+
+        LocalDate targetDate = date != null ? date : LocalDate.now();
+        MarketHeatmapResponse response = marketAnalysisService.getHeatmapData(targetDate);
 
         return ResponseEntity.ok(ApiResponse.success(response));
     }
