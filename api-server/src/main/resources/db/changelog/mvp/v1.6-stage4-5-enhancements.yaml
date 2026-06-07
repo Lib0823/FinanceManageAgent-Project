@@ -1,0 +1,544 @@
+databaseChangeLog:
+  # Stage 4 & 5 Enhancements for Safety Filter and Trade Execution
+
+  # ========================================
+  # stock_filter_score table enhancements
+  # ========================================
+  - changeSet:
+      id: 1.6.1-add-morning-return-close-position
+      author: claude
+      context: mvp
+      comment: "Add morning_return and close_position columns to stock_filter_score"
+      changes:
+        - addColumn:
+            tableName: stock_filter_score
+            columns:
+              - column:
+                  name: morning_return
+                  type: NUMERIC(10,4)
+              - column:
+                  name: close_position
+                  type: NUMERIC(5,4)
+        - setColumnRemarks:
+            tableName: stock_filter_score
+            columnName: morning_return
+            remarks: '장초반 수익률'
+        - setColumnRemarks:
+            tableName: stock_filter_score
+            columnName: close_position
+            remarks: '종가 위치 (0~1)'
+
+  # ========================================
+  # ai_trade_decision table enhancements
+  # ========================================
+  - changeSet:
+      id: 1.6.2-add-confidence-score-feature-summary
+      author: claude
+      context: mvp
+      comment: "Add confidence_score and feature_summary to ai_trade_decision"
+      changes:
+        - addColumn:
+            tableName: ai_trade_decision
+            columns:
+              - column:
+                  name: confidence_score
+                  type: DECIMAL(5,4)
+              - column:
+                  name: feature_summary
+                  type: JSONB
+        - setColumnRemarks:
+            tableName: ai_trade_decision
+            columnName: confidence_score
+            remarks: 'Gemini 판단 신뢰도 (0.0~1.0, 추후 확장용)'
+        - setColumnRemarks:
+            tableName: ai_trade_decision
+            columnName: feature_summary
+            remarks: '판단 근거 주요 피처값 요약'
+
+  # ========================================
+  # safety_filter_result table creation and enhancements
+  # ========================================
+  - changeSet:
+      id: 1.6.3-create-safety-filter-result
+      author: claude
+      context: mvp
+      comment: "Create safety_filter_result table for Stage 4 safety filtering"
+      changes:
+        - createTable:
+            tableName: safety_filter_result
+            columns:
+              - column:
+                  name: id
+                  type: SERIAL
+                  constraints:
+                    primaryKey: true
+              - column:
+                  name: filter_date
+                  type: DATE
+                  constraints:
+                    nullable: false
+              - column:
+                  name: stock_code
+                  type: VARCHAR(10)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: stock_name
+                  type: VARCHAR(100)
+              - column:
+                  name: passed
+                  type: BOOLEAN
+                  defaultValueBoolean: false
+                  constraints:
+                    nullable: false
+              - column:
+                  name: failure_reason
+                  type: TEXT
+              - column:
+                  name: max_quantity
+                  type: INT
+              - column:
+                  name: current_price
+                  type: BIGINT
+              - column:
+                  name: filter_checks
+                  type: JSONB
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: CURRENT_TIMESTAMP
+        - addUniqueConstraint:
+            tableName: safety_filter_result
+            columnNames: filter_date, stock_code
+            constraintName: uk_safety_filter_date_stock
+        - setTableRemarks:
+            tableName: safety_filter_result
+            remarks: 'Stage 4 안전장치 필터링 결과'
+        - setColumnRemarks:
+            tableName: safety_filter_result
+            columnName: filter_date
+            remarks: '필터링 수행 날짜'
+        - setColumnRemarks:
+            tableName: safety_filter_result
+            columnName: stock_code
+            remarks: '종목 코드'
+        - setColumnRemarks:
+            tableName: safety_filter_result
+            columnName: stock_name
+            remarks: '종목명'
+        - setColumnRemarks:
+            tableName: safety_filter_result
+            columnName: passed
+            remarks: '필터 통과 여부'
+        - setColumnRemarks:
+            tableName: safety_filter_result
+            columnName: failure_reason
+            remarks: '필터 미통과 사유'
+        - setColumnRemarks:
+            tableName: safety_filter_result
+            columnName: max_quantity
+            remarks: '투자금액 기준 최대 매수 가능 수량'
+        - setColumnRemarks:
+            tableName: safety_filter_result
+            columnName: current_price
+            remarks: '필터링 시점의 현재가'
+        - setColumnRemarks:
+            tableName: safety_filter_result
+            columnName: filter_checks
+            remarks: '각 규칙별 통과 여부 JSON'
+
+  # ========================================
+  # New table: trade_execution_plan
+  # ========================================
+  - changeSet:
+      id: 1.6.4-create-trade-execution-plan
+      author: claude
+      context: mvp
+      comment: "Create trade_execution_plan table for safety filter passed trades"
+      changes:
+        - createTable:
+            tableName: trade_execution_plan
+            columns:
+              - column:
+                  name: id
+                  type: SERIAL
+                  constraints:
+                    primaryKey: true
+              - column:
+                  name: execution_date
+                  type: DATE
+                  constraints:
+                    nullable: false
+              - column:
+                  name: stock_code
+                  type: VARCHAR(10)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: stock_name
+                  type: VARCHAR(100)
+              - column:
+                  name: trade_type
+                  type: VARCHAR(4)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: planned_quantity
+                  type: INT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: reference_price
+                  type: BIGINT
+              - column:
+                  name: estimated_amount
+                  type: BIGINT
+              - column:
+                  name: gemini_reason
+                  type: TEXT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: gemini_rank
+                  type: INT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: safety_filter_passed
+                  type: BOOLEAN
+                  constraints:
+                    nullable: false
+              - column:
+                  name: safety_filter_details
+                  type: JSONB
+              - column:
+                  name: execution_status
+                  type: VARCHAR(20)
+                  defaultValue: 'PENDING'
+              - column:
+                  name: executed_at
+                  type: TIMESTAMP
+              - column:
+                  name: execution_result
+                  type: JSONB
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  defaultValueComputed: NOW()
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  defaultValueComputed: NOW()
+        - createIndex:
+            indexName: idx_execution_plan_date_stock
+            tableName: trade_execution_plan
+            columns:
+              - column:
+                  name: execution_date
+              - column:
+                  name: stock_code
+        - createIndex:
+            indexName: idx_execution_plan_status
+            tableName: trade_execution_plan
+            columns:
+              - column:
+                  name: execution_status
+        - createIndex:
+            indexName: idx_execution_plan_date
+            tableName: trade_execution_plan
+            columns:
+              - column:
+                  name: execution_date
+                  descending: true
+        - setTableRemarks:
+            tableName: trade_execution_plan
+            remarks: 'Safety Filter 통과 후 실제 매매 계획 및 실행 결과'
+        - setColumnRemarks:
+            tableName: trade_execution_plan
+            columnName: safety_filter_details
+            remarks: '각 규칙별 검증 상세 내용 (JSONB)'
+        - setColumnRemarks:
+            tableName: trade_execution_plan
+            columnName: execution_result
+            remarks: 'KIS API 응답 결과 (주문번호, 체결가 등)'
+
+  # ========================================
+  # New table: feature_threshold_config
+  # ========================================
+  - changeSet:
+      id: 1.6.5-create-feature-threshold-config
+      author: claude
+      context: mvp
+      comment: "Create feature_threshold_config table for dynamic threshold management"
+      changes:
+        - createTable:
+            tableName: feature_threshold_config
+            columns:
+              - column:
+                  name: id
+                  type: SERIAL
+                  constraints:
+                    primaryKey: true
+              - column:
+                  name: feature_name
+                  type: VARCHAR(50)
+                  constraints:
+                    nullable: false
+                    unique: true
+              - column:
+                  name: buy_enabled
+                  type: BOOLEAN
+                  defaultValueBoolean: true
+              - column:
+                  name: buy_operator
+                  type: VARCHAR(10)
+              - column:
+                  name: buy_threshold
+                  type: DECIMAL(20,8)
+              - column:
+                  name: buy_description
+                  type: TEXT
+              - column:
+                  name: sell_enabled
+                  type: BOOLEAN
+                  defaultValueBoolean: true
+              - column:
+                  name: sell_operator
+                  type: VARCHAR(10)
+              - column:
+                  name: sell_threshold
+                  type: DECIMAL(20,8)
+              - column:
+                  name: sell_description
+                  type: TEXT
+              - column:
+                  name: is_active
+                  type: BOOLEAN
+                  defaultValueBoolean: true
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  defaultValueComputed: NOW()
+              - column:
+                  name: updated_by
+                  type: VARCHAR(50)
+                  defaultValue: 'SYSTEM'
+
+  # ========================================
+  # Insert default feature thresholds
+  # ========================================
+  - changeSet:
+      id: 1.6.6-insert-default-thresholds
+      author: claude
+      context: mvp
+      comment: "Insert default safety filter thresholds"
+      changes:
+        - insert:
+            tableName: feature_threshold_config
+            columns:
+              - column: {name: feature_name, value: 'foreign_net_buy'}
+              - column: {name: buy_enabled, valueBoolean: true}
+              - column: {name: buy_operator, value: '>'}
+              - column: {name: buy_threshold, valueNumeric: 0}
+              - column: {name: buy_description, value: '외국인 순매수 양수 (매수세)'}
+              - column: {name: sell_enabled, valueBoolean: true}
+              - column: {name: sell_operator, value: '<'}
+              - column: {name: sell_threshold, valueNumeric: 0}
+              - column: {name: sell_description, value: '외국인 순매도 음수 (매도세)'}
+        - insert:
+            tableName: feature_threshold_config
+            columns:
+              - column: {name: feature_name, value: 'institutional_net_buy'}
+              - column: {name: buy_enabled, valueBoolean: true}
+              - column: {name: buy_operator, value: '>'}
+              - column: {name: buy_threshold, valueNumeric: 0}
+              - column: {name: buy_description, value: '기관 순매수 양수'}
+              - column: {name: sell_enabled, valueBoolean: true}
+              - column: {name: sell_operator, value: '<'}
+              - column: {name: sell_threshold, valueNumeric: 0}
+              - column: {name: sell_description, value: '기관 순매도 음수'}
+        - insert:
+            tableName: feature_threshold_config
+            columns:
+              - column: {name: feature_name, value: 'sentiment_score'}
+              - column: {name: buy_enabled, valueBoolean: true}
+              - column: {name: buy_operator, value: '>='}
+              - column: {name: buy_threshold, valueNumeric: 0.3}
+              - column: {name: buy_description, value: '긍정적 뉴스 감성 (0.3 이상)'}
+              - column: {name: sell_enabled, valueBoolean: true}
+              - column: {name: sell_operator, value: '<='}
+              - column: {name: sell_threshold, valueNumeric: -0.3}
+              - column: {name: sell_description, value: '부정적 뉴스 감성 (-0.3 이하)'}
+        - insert:
+            tableName: feature_threshold_config
+            columns:
+              - column: {name: feature_name, value: 'prophet_price_trend'}
+              - column: {name: buy_enabled, valueBoolean: true}
+              - column: {name: buy_operator, value: '>'}
+              - column: {name: buy_threshold, valueNumeric: 0}
+              - column: {name: buy_description, value: '가격 상승 추세'}
+              - column: {name: sell_enabled, valueBoolean: true}
+              - column: {name: sell_operator, value: '<'}
+              - column: {name: sell_threshold, valueNumeric: 0}
+              - column: {name: sell_description, value: '가격 하락 추세'}
+        - insert:
+            tableName: feature_threshold_config
+            columns:
+              - column: {name: feature_name, value: 'prophet_volume_trend'}
+              - column: {name: buy_enabled, valueBoolean: true}
+              - column: {name: buy_operator, value: '>'}
+              - column: {name: buy_threshold, valueNumeric: 0}
+              - column: {name: buy_description, value: '매수 거래량 증가 추세'}
+              - column: {name: sell_enabled, valueBoolean: false}
+              - column: {name: sell_description, value: 'SELL 시 거래량 추세 미사용'}
+        - insert:
+            tableName: feature_threshold_config
+            columns:
+              - column: {name: feature_name, value: 'prophet_price_uncertainty'}
+              - column: {name: buy_enabled, valueBoolean: true}
+              - column: {name: buy_operator, value: '<='}
+              - column: {name: buy_threshold, valueNumeric: 500}
+              - column: {name: buy_description, value: '예측 불확실성 낮음 (500 이하)'}
+              - column: {name: sell_enabled, valueBoolean: true}
+              - column: {name: sell_operator, value: '<='}
+              - column: {name: sell_threshold, valueNumeric: 500}
+              - column: {name: sell_description, value: '예측 불확실성 낮음'}
+        - insert:
+            tableName: feature_threshold_config
+            columns:
+              - column: {name: feature_name, value: 'per'}
+              - column: {name: buy_enabled, valueBoolean: true}
+              - column: {name: buy_operator, value: '<='}
+              - column: {name: buy_threshold, valueNumeric: 30}
+              - column: {name: buy_description, value: 'PER 30 이하 (저평가 기준)'}
+              - column: {name: sell_enabled, valueBoolean: false}
+              - column: {name: sell_description, value: 'SELL 시 PER 미사용'}
+        - insert:
+            tableName: feature_threshold_config
+            columns:
+              - column: {name: feature_name, value: 'roe'}
+              - column: {name: buy_enabled, valueBoolean: true}
+              - column: {name: buy_operator, value: '>='}
+              - column: {name: buy_threshold, valueNumeric: 10}
+              - column: {name: buy_description, value: 'ROE 10% 이상 (수익성 양호)'}
+              - column: {name: sell_enabled, valueBoolean: false}
+              - column: {name: sell_description, value: 'SELL 시 ROE 미사용'}
+        - insert:
+            tableName: feature_threshold_config
+            columns:
+              - column: {name: feature_name, value: 'operating_margin'}
+              - column: {name: buy_enabled, valueBoolean: true}
+              - column: {name: buy_operator, value: '>='}
+              - column: {name: buy_threshold, valueNumeric: 5}
+              - column: {name: buy_description, value: '영업이익률 5% 이상'}
+              - column: {name: sell_enabled, valueBoolean: false}
+              - column: {name: sell_description, value: 'SELL 시 영업이익률 미사용'}
+        - insert:
+            tableName: feature_threshold_config
+            columns:
+              - column: {name: feature_name, value: 'morning_return'}
+              - column: {name: buy_enabled, valueBoolean: true}
+              - column: {name: buy_operator, value: '>'}
+              - column: {name: buy_threshold, valueNumeric: 0}
+              - column: {name: buy_description, value: '장초반 상승 (양수)'}
+              - column: {name: sell_enabled, valueBoolean: false}
+              - column: {name: sell_description, value: 'SELL 시 장초반 수익률 미사용'}
+        - insert:
+            tableName: feature_threshold_config
+            columns:
+              - column: {name: feature_name, value: 'close_position'}
+              - column: {name: buy_enabled, valueBoolean: true}
+              - column: {name: buy_operator, value: '>='}
+              - column: {name: buy_threshold, valueNumeric: 0.6}
+              - column: {name: buy_description, value: '고가 근처 마감 (0.6 이상)'}
+              - column: {name: sell_enabled, valueBoolean: false}
+              - column: {name: sell_description, value: 'SELL 시 종가 위치 미사용'}
+
+  # ========================================
+  # Additional indexes for performance
+  # ========================================
+  - changeSet:
+      id: 1.6.7-create-additional-indexes
+      author: claude
+      context: mvp
+      comment: "Add performance optimization indexes"
+      changes:
+        - createIndex:
+            indexName: idx_ai_decision_date_type
+            tableName: ai_trade_decision
+            columns:
+              - column:
+                  name: decision_date
+                  descending: true
+              - column:
+                  name: decision
+        - createIndex:
+            indexName: idx_ai_decision_stock
+            tableName: ai_trade_decision
+            columns:
+              - column:
+                  name: stock_code
+              - column:
+                  name: decision_date
+                  descending: true
+        - createIndex:
+            indexName: idx_safety_filter_date_passed
+            tableName: safety_filter_result
+            columns:
+              - column:
+                  name: filter_date
+                  descending: true
+              - column:
+                  name: passed
+        - createIndex:
+            indexName: idx_safety_filter_stock
+            tableName: safety_filter_result
+            columns:
+              - column:
+                  name: stock_code
+              - column:
+                  name: filter_date
+                  descending: true
+
+  # ========================================
+  # Create views for Web-App convenience
+  # ========================================
+  - changeSet:
+      id: 1.6.8-create-convenience-views
+      author: claude
+      context: mvp
+      comment: "Create views for Web-App data access"
+      changes:
+        - createView:
+            viewName: v_latest_trade_plan
+            selectQuery: |
+              SELECT
+                  execution_date,
+                  trade_type,
+                  COUNT(*) as plan_count,
+                  SUM(CASE WHEN safety_filter_passed THEN 1 ELSE 0 END) as passed_count,
+                  SUM(CASE WHEN execution_status = 'EXECUTED' THEN 1 ELSE 0 END) as executed_count,
+                  SUM(estimated_amount) as total_estimated_amount
+              FROM trade_execution_plan
+              WHERE execution_date = CURRENT_DATE
+              GROUP BY execution_date, trade_type
+        - createView:
+            viewName: v_decision_with_filter
+            selectQuery: |
+              SELECT
+                  d.decision_date,
+                  d.stock_code,
+                  d.decision,
+                  d.reason as gemini_reason,
+                  d.rank as gemini_rank,
+                  f.passed as safety_passed,
+                  f.failure_reason,
+                  f.filter_checks,
+                  f.max_quantity,
+                  f.current_price
+              FROM ai_trade_decision d
+              LEFT JOIN safety_filter_result f
+                  ON d.stock_code = f.stock_code
+                  AND d.decision_date = f.filter_date
+              WHERE d.decision_date >= CURRENT_DATE - INTERVAL '7 days'
+              ORDER BY d.decision_date DESC, d.rank ASC
