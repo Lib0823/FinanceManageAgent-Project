@@ -257,48 +257,63 @@ class DatabaseRepository:
             logger.error(f"Error saving sentiment analysis for {stock_code}: {e}")
             return False
 
-    def save_kospi_index(self, kospi_data: Dict[str, float], trade_date: date) -> bool:
+    def save_market_summary(
+        self,
+        summary_data: Dict[str, any],
+        summary_date: date
+    ) -> bool:
         """
-        Save KOSPI index data to market_daily_summary table.
+        Save market daily summary to market_daily_summary table.
 
         Args:
-            kospi_data: Dict with kospi_index, kospi_change_rate, kospi_volume, kospi_trade_value
-            trade_date: Trade date
+            summary_data: Dict with market summary data
+            summary_date: Summary date
 
         Returns:
             True if successful, False otherwise
         """
         session = self.session_factory()
         try:
-            logger.info(f"Saving KOSPI index data for {trade_date}")
+            logger.info(f"Saving market summary for {summary_date}")
 
             # Delete existing record for this date (if any)
             session.query(MarketDailySummary).filter(
-                MarketDailySummary.trade_date == trade_date
+                MarketDailySummary.summary_date == summary_date
             ).delete()
 
-            # Create new record
+            # Create new record with all available fields
             record = MarketDailySummary(
-                trade_date=trade_date,
-                kospi_index=kospi_data['kospi_index'],
-                kospi_change_rate=kospi_data['kospi_change_rate'],
-                kospi_volume=kospi_data['kospi_volume'],
-                kospi_trade_value=kospi_data['kospi_trade_value']
+                summary_date=summary_date,
+                kospi_index=summary_data.get('kospi_index'),
+                kospi_change_rate=summary_data.get('kospi_change_rate'),
+                kospi_volume=summary_data.get('kospi_volume'),
+                total_stocks=summary_data.get('total_stocks'),
+                rising_stocks=summary_data.get('rising_stocks'),
+                falling_stocks=summary_data.get('falling_stocks'),
+                unchanged_stocks=summary_data.get('unchanged_stocks'),
+                total_foreign_net_buy=summary_data.get('total_foreign_net_buy'),
+                total_institutional_net_buy=summary_data.get('total_institutional_net_buy'),
+                market_sentiment_score=summary_data.get('market_sentiment_score')
             )
 
             session.add(record)
             session.commit()
 
-            logger.info(f"Successfully saved KOSPI index: {kospi_data['kospi_index']:.2f}")
+            logger.info(f"Successfully saved market summary: KOSPI={summary_data.get('kospi_index'):.2f}")
             return True
 
         except SQLAlchemyError as e:
-            logger.error(f"Database error while saving KOSPI index: {e}")
+            logger.error(f"Database error while saving market summary: {e}")
             session.rollback()
             return False
 
         finally:
             session.close()
+
+    # Deprecated: kept for backward compatibility
+    def save_kospi_index(self, kospi_data: Dict[str, float], trade_date: date) -> bool:
+        """Deprecated: Use save_market_summary instead."""
+        return self.save_market_summary(kospi_data, trade_date)
 
     def save_prophet_forecast_detailed(self, forecast_data: Dict, trade_date: date) -> bool:
         """

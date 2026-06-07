@@ -37,15 +37,22 @@ class MarketDailySummary(Base):
 
     __tablename__ = 'market_daily_summary'
 
-    trade_date = Column(Date, primary_key=True)
-    kospi_index = Column(Numeric(10, 2), nullable=False)
-    kospi_change_rate = Column(Numeric(8, 4), nullable=False)
-    kospi_volume = Column(BigInteger, nullable=False)
-    kospi_trade_value = Column(BigInteger, nullable=False)  # in million KRW
-    created_at = Column(DateTime, default=datetime.now)
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    summary_date = Column(Date, nullable=False)
+    kospi_index = Column(Numeric(10, 2), nullable=True)
+    kospi_change_rate = Column(Numeric(8, 4), nullable=True)
+    kospi_volume = Column(BigInteger, nullable=True)
+    total_stocks = Column(Integer, nullable=True)
+    rising_stocks = Column(Integer, nullable=True)
+    falling_stocks = Column(Integer, nullable=True)
+    unchanged_stocks = Column(Integer, nullable=True)
+    total_foreign_net_buy = Column(BigInteger, nullable=True)
+    total_institutional_net_buy = Column(BigInteger, nullable=True)
+    market_sentiment_score = Column(Numeric(5, 4), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
 
     def __repr__(self):
-        return f"<MarketDailySummary({self.trade_date}, KOSPI={self.kospi_index})>"
+        return f"<MarketDailySummary({self.summary_date}, KOSPI={self.kospi_index})>"
 
 
 class ProphetForecast(Base):

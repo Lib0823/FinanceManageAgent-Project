@@ -141,6 +141,34 @@ class PipelineOrchestrator:
                     'error': error_msg
                 }
 
+            # Step 4: Save market summary (KOSPI index + market statistics)
+            logger.info("Fetching and saving market summary data")
+            try:
+                # Get KOSPI index data
+                kospi_data = await self.kis_client.get_kospi_index()
+
+                # Calculate market statistics from stock_data_df
+                market_summary = {
+                    'kospi_index': kospi_data.get('index'),
+                    'kospi_change_rate': kospi_data.get('change_rate'),
+                    'kospi_volume': kospi_data.get('volume'),
+                    'total_stocks': len(stock_data_df),
+                    'rising_stocks': len(stock_data_df[stock_data_df['price_change_rate'] > 0]) if 'price_change_rate' in stock_data_df.columns else None,
+                    'falling_stocks': len(stock_data_df[stock_data_df['price_change_rate'] < 0]) if 'price_change_rate' in stock_data_df.columns else None,
+                    'unchanged_stocks': len(stock_data_df[stock_data_df['price_change_rate'] == 0]) if 'price_change_rate' in stock_data_df.columns else None,
+                    'total_foreign_net_buy': int(stock_data_df['foreign_net_buy'].sum()) if 'foreign_net_buy' in stock_data_df.columns else None,
+                    'total_institutional_net_buy': int(stock_data_df['institution_net_buy'].sum()) if 'institution_net_buy' in stock_data_df.columns else None,
+                    'market_sentiment_score': None  # Will be updated in Stage 2-2
+                }
+
+                market_save_success = self.db_repo.save_market_summary(market_summary, trade_date)
+                if not market_save_success:
+                    logger.warning("Failed to save market summary (non-critical)")
+                else:
+                    logger.info(f"Market summary saved: KOSPI={market_summary['kospi_index']:.2f}")
+            except Exception as e:
+                logger.warning(f"Failed to save market summary: {e} (non-critical)")
+
             # Extract selected stocks
             selected_df = filtered_df[filtered_df['is_selected'] == True]
             selected_codes = selected_df['stock_code'].tolist()
