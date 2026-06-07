@@ -1,6 +1,7 @@
 package com.inbeom.apiserver.controller;
 
 import com.inbeom.apiserver.dto.common.ApiResponse;
+import com.inbeom.apiserver.dto.trade.BalanceSummaryResponse;
 import com.inbeom.apiserver.dto.trade.TradeHistoryResponse;
 import com.inbeom.apiserver.dto.trade.TradeRequest;
 import com.inbeom.apiserver.service.TradingService;
@@ -92,6 +93,24 @@ public class TradingController {
 
         return ResponseEntity.ok(
                 ApiResponse.success("Trade history retrieved from KIS API successfully", history)
+        );
+    }
+
+    /**
+     * GET /api/trading/holdings
+     * Get current holdings from KIS API (보유 종목 조회)
+     */
+    @GetMapping("/holdings")
+    public ResponseEntity<ApiResponse<BalanceSummaryResponse>> getHoldings(
+            @RequestHeader("Authorization") String authHeader
+    ) {
+        String token = authHeader.substring(7);
+        Long userId = jwtTokenProvider.getUserIdFromToken(token);
+
+        BalanceSummaryResponse holdings = tradingService.getHoldings(userId);
+
+        return ResponseEntity.ok(
+                ApiResponse.success("Holdings retrieved successfully", holdings)
         );
     }
 }
