@@ -162,7 +162,8 @@ class NewsCollector:
             List of articles: [{title, content, published, url}]
         """
         try:
-            url = f'https://finance.naver.com/item/news_news.naver?code={stock_code}&page=1'
+            # Use .nhn extension (Naver's legacy format)
+            url = f'https://finance.naver.com/item/news_news.nhn?code={stock_code}&page=1'
 
             if self.session is None:
                 raise RuntimeError("Session not initialized. Use 'async with' context manager.")
@@ -174,20 +175,36 @@ class NewsCollector:
             soup = BeautifulSoup(html, 'html.parser')
             articles = []
 
-            # Find news items in table
-            news_items = soup.select('.tb_cont tr')[:max_articles * 2]  # Fetch extra for filtering
+            # Find news items in table - try multiple selectors
+            news_items = soup.select('.tb_cont tr')
+            if not news_items:
+                # Fallback: try different selector
+                news_items = soup.select('table.type5 tr')
+
+            news_items = news_items[:max_articles * 2]  # Fetch extra for filtering
 
             for item in news_items:
                 try:
+                    # Try multiple selector patterns for title
                     title_element = item.select_one('.title a')
+                    if not title_element:
+                        title_element = item.select_one('td a')
+
+                    # Try multiple selector patterns for date
                     date_element = item.select_one('.date')
+                    if not date_element:
+                        date_element = item.select_one('td.date')
 
                     if not title_element or not date_element:
                         continue
 
                     title = title_element.text.strip()
-                    link = title_element['href']
+                    link = title_element.get('href', '')
                     date_str = date_element.text.strip()
+
+                    # Skip if link is empty
+                    if not link:
+                        continue
 
                     # Parse date (YYYY.MM.DD HH:MM format)
                     published = self._parse_naver_date(date_str)
@@ -197,7 +214,7 @@ class NewsCollector:
 
                     articles.append({
                         'title': title,
-                        'content': content[:200],  # First 200 chars
+                        'content': content[:200] if content else title[:200],  # Fallback to title if content empty
                         'published': published,
                         'url': link
                     })

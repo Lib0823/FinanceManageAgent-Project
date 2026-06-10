@@ -54,6 +54,10 @@ class ProphetForecaster:
                 raise ValueError("DataFrame must have 'ds' and 'y' columns")
 
             # Train Prophet model
+            # Disable cmdstanpy to avoid compatibility issues
+            import warnings
+            warnings.filterwarnings('ignore')
+
             model = Prophet(
                 daily_seasonality=False,
                 weekly_seasonality=True,
@@ -61,7 +65,11 @@ class ProphetForecaster:
                 seasonality_mode='additive'
             )
 
-            model.fit(df)
+            # Suppress Prophet fitting logs
+            import logging as prophet_logging
+            prophet_logging.getLogger('prophet').setLevel(prophet_logging.ERROR)
+
+            model.fit(df, algorithm='Newton')
 
             # Generate forecast for next N business days
             future = model.make_future_dataframe(periods=self.forecast_days, freq=freq)

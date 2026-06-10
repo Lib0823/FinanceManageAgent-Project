@@ -88,7 +88,7 @@ class PipelineOrchestrator:
                 logger.warning(f"⚠️ Market is closed on {trade_date} (holiday or non-trading day)")
                 return {
                     'success': False,
-                    'trade_date': trade_date,
+                    'trade_date': trade_date.isoformat(),
                     'error': '오늘은 휴장일입니다',
                     'is_holiday': True
                 }
@@ -118,7 +118,7 @@ class PipelineOrchestrator:
                 logger.error(error_msg)
                 return {
                     'success': False,
-                    'trade_date': trade_date,
+                    'trade_date': trade_date.isoformat(),
                     'error': error_msg
                 }
 
@@ -137,21 +137,21 @@ class PipelineOrchestrator:
                 logger.error(error_msg)
                 return {
                     'success': False,
-                    'trade_date': trade_date,
+                    'trade_date': trade_date.isoformat(),
                     'error': error_msg
                 }
 
             # Step 4: Save market summary (KOSPI index + market statistics)
             logger.info("Fetching and saving market summary data")
             try:
-                # Get KOSPI index data
-                kospi_data = await self.kis_client.get_kospi_index()
+                # Get KOSPI index data (pass trade_date in YYYYMMDD format)
+                kospi_data = await self.kis_client.get_kospi_index(trade_date.strftime('%Y%m%d'))
 
                 # Calculate market statistics from stock_data_df
                 market_summary = {
-                    'kospi_index': kospi_data.get('index'),
-                    'kospi_change_rate': kospi_data.get('change_rate'),
-                    'kospi_volume': kospi_data.get('volume'),
+                    'kospi_index': kospi_data.get('kospi_index'),  # Fixed: was 'index'
+                    'kospi_change_rate': kospi_data.get('kospi_change_rate'),  # Fixed: was 'change_rate'
+                    'kospi_volume': kospi_data.get('kospi_volume'),  # Fixed: was 'volume'
                     'total_stocks': len(stock_data_df),
                     'rising_stocks': len(stock_data_df[stock_data_df['price_change_rate'] > 0]) if 'price_change_rate' in stock_data_df.columns else None,
                     'falling_stocks': len(stock_data_df[stock_data_df['price_change_rate'] < 0]) if 'price_change_rate' in stock_data_df.columns else None,
@@ -177,7 +177,7 @@ class PipelineOrchestrator:
 
             return {
                 'success': True,
-                'trade_date': trade_date,
+                'trade_date': trade_date.isoformat(),
                 'total_stocks': len(filtered_df),
                 'selected_stocks': len(selected_codes),
                 'selected_codes': selected_codes,
@@ -194,7 +194,7 @@ class PipelineOrchestrator:
             logger.exception(error_msg)
             return {
                 'success': False,
-                'trade_date': trade_date,
+                'trade_date': trade_date.isoformat(),
                 'error': error_msg
             }
 
@@ -247,7 +247,7 @@ class PipelineOrchestrator:
 
         pipeline_result = {
             'success': False,
-            'trade_date': trade_date,
+            'trade_date': trade_date.isoformat(),
             'stages': {}
         }
 

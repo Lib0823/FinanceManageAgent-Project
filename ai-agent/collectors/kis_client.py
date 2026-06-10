@@ -516,14 +516,14 @@ class KISClient:
             logger.exception(f"Exception while fetching current price for {stock_code}: {e}")
             return {'current_price': 0}
 
-    async def get_kospi_index(self) -> Dict[str, float]:
+    async def get_kospi_index(self, trade_date: Optional[str] = None) -> Dict[str, float]:
         """
         Get KOSPI index data for market daily summary.
 
         API: FHKUP03500100 (업종/지수 조회)
 
         Args:
-            None - KOSPI code is fixed as '0001'
+            trade_date: Trading date in YYYYMMDD format (optional, defaults to today)
 
         Returns:
             Dict with keys:
@@ -534,17 +534,27 @@ class KISClient:
         """
         logger.info("Fetching KOSPI index data")
 
+        # Default to today if no trade_date provided
+        if trade_date is None:
+            from datetime import datetime
+            trade_date = datetime.now().strftime('%Y%m%d')
+
         endpoint = '/uapi/domestic-stock/v1/quotations/inquire-index-price'
         tr_id = 'FHKUP03500100'
 
         params = {
             'FID_COND_MRKT_DIV_CODE': 'U',  # 업종
-            'FID_INPUT_ISCD': '0001'  # KOSPI 코드
+            'FID_INPUT_ISCD': '0001',  # KOSPI 코드
+            'FID_INPUT_DATE_1': trade_date,  # 조회 시작일 (YYYYMMDD)
+            'FID_INPUT_DATE_2': trade_date,  # 조회 종료일 (YYYYMMDD)
+            'FID_PERIOD_DIV_CODE': 'D'  # Daily (일별)
         }
 
         try:
             result = await self.request('GET', endpoint, tr_id, params=params)
-            output = result.get('output', {})
+
+            # IMPORTANT: API returns 'output1' (not 'output')
+            output = result.get('output1', {})
 
             kospi_index = float(output.get('bstp_nmix_prpr', 0))  # 업종 지수
             kospi_change_rate = float(output.get('bstp_nmix_prdy_ctrt', 0))  # 전일 대비 등락률

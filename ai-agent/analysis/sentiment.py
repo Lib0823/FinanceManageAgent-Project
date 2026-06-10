@@ -38,11 +38,16 @@ class SentimentAnalyzer:
         logger.info(f"Starting sentiment analysis for {len(stock_codes)} stocks")
 
         async with NewsCollector() as collector:
-            # Track 2: Stock-specific sentiment (for Gemini)
-            stock_sentiments = await self._analyze_stock_specific(stock_codes, collector)
-
-            # Track 1: Market sentiment (for Vue3 dashboard, stored separately)
+            # Track 1: Market sentiment (calculated FIRST as fallback)
             market_sentiment = await self._analyze_market_sentiment(collector)
+            logger.info(f"Market sentiment will be used as fallback: {market_sentiment:.4f}")
+
+            # Track 2: Stock-specific sentiment (for Gemini)
+            stock_sentiments = await self._analyze_stock_specific(
+                stock_codes,
+                collector,
+                fallback_sentiment=market_sentiment
+            )
 
         # Return stock-specific sentiments for Gemini
         return stock_sentiments
@@ -50,7 +55,8 @@ class SentimentAnalyzer:
     async def _analyze_stock_specific(
         self,
         stock_codes: List[str],
-        collector: NewsCollector
+        collector: NewsCollector,
+        fallback_sentiment: float = 0.0
     ) -> pd.DataFrame:
         """
         Track 2: Analyze stock-specific news (Naver Finance crawling).
@@ -58,6 +64,7 @@ class SentimentAnalyzer:
         Args:
             stock_codes: List of stock codes
             collector: NewsCollector instance
+            fallback_sentiment: Sentiment score to use when stock news not available
 
         Returns:
             DataFrame with columns: stock_code, sentiment_score
@@ -70,8 +77,8 @@ class SentimentAnalyzer:
                 articles = await collector.collect_stock_news(stock_code, max_articles=5)
 
                 if not articles:
-                    logger.warning(f"No news found for {stock_code}, using neutral sentiment")
-                    sentiment_score = 0.0
+                    logger.warning(f"No news found for {stock_code}, using market sentiment: {fallback_sentiment:.4f}")
+                    sentiment_score = fallback_sentiment
                 else:
                     # Time-weighted sentiment (newest articles have higher weight)
                     sentiment_score = self.kr_finbert.analyze_multiple_time_weighted(articles)
@@ -85,10 +92,10 @@ class SentimentAnalyzer:
 
             except Exception as e:
                 logger.error(f"Sentiment analysis failed for {stock_code}: {e}")
-                # Fallback to neutral sentiment
+                # Fallback to market sentiment
                 results.append({
                     'stock_code': stock_code,
-                    'sentiment_score': 0.0
+                    'sentiment_score': fallback_sentiment
                 })
 
         df = pd.DataFrame(results)
