@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AppHeader from '@/components/common/AppHeader.vue'
 import { marketAnalysisApi } from '@/services/api'
@@ -17,7 +17,20 @@ const error = ref(null)
 // TOP3 toggle state
 const activeTop3 = ref('buy') // 'buy' or 'sell'
 
-// 30종목 히트맵 데이터
+// KOSPI 정보
+const kospiInfo = ref({
+  index: null,
+  change_rate: null,
+  volume: null
+})
+
+// 시장 수급 정보 (합계)
+const supplyDemand = ref({
+  foreign_net_buy: null,
+  institutional_net_buy: null
+})
+
+// 30종목 히트맵 통계
 const heatmapStats = ref({
   totalStocks: 30,
   buyCandidate: 0,
@@ -25,8 +38,13 @@ const heatmapStats = ref({
   neutral: 0
 })
 
-// 히트맵 상세 데이터
+// 히트맵 상세 데이터 (백엔드에서 scaler_score DESC 정렬됨)
 const heatmapData = ref([])
+
+// 백엔드가 제공하는 summary (옵셔널)
+const heatmapSummary = ref(null)
+
+// 클라이언트에서 계산한 인사이트 (summary fallback)
 const heatmapInsights = ref({
   avgForeignNetBuy: 0,
   avgInstitutionalNetBuy: 0,
@@ -40,7 +58,7 @@ const buyTop3 = ref([])
 // Gemini AI 매도 TOP3
 const sellTop3 = ref([])
 
-// 시장 전반 감성분석 데이터
+// 시장 전반 감성분석 데이터 (snake_case 통일)
 const marketSentiment = ref({
   score: 0,
   label: '중립',
@@ -49,9 +67,21 @@ const marketSentiment = ref({
     neutral: { count: 0, percent: 0, color: '#4a5568' },
     negative: { count: 0, percent: 0, color: '#60a5fa' }
   },
-  timeRange: '전날 18:00 — 당일 08:50',
+  time_range: '전날 18:00 — 당일 08:50',
   sources: '한경 · 매경 · 연합'
 })
+
+// Top 10 종목 (실제 히트맵 매트릭스 표시용)
+const topHeatmapStocks = computed(() => heatmapData.value.slice(0, 10))
+
+// 히트맵 매트릭스의 피처 컬럼 정의
+const heatmapFeatures = [
+  { key: 'foreign_net_buy', label: '외국인', format: 'money' },
+  { key: 'institutional_net_buy', label: '기관', format: 'money' },
+  { key: 'sentiment_score', label: '감성', format: 'decimal' },
+  { key: 'price_trend', label: '추세', format: 'percent' },
+  { key: 'vol_avg_multiple', label: '거래량', format: 'multiple' }
+]
 
 // Fetch market data
 const fetchMarketData = async () => {
@@ -72,7 +102,7 @@ const fetchMarketData = async () => {
     analysisDate.value = latestDate
 
     // Format date for display (handle ISO date string format)
-    const dateObj = new Date(latestDate + 'T00:00:00') // Add time to ensure correct timezone
+    const dateObj = new Date(latestDate + 'T00:00:00')
     analysisDateStr.value = `${dateObj.getFullYear()}.${String(dateObj.getMonth() + 1).padStart(2, '0')}.${String(dateObj.getDate()).padStart(2, '0')}`
 
     // 2. Fetch all market data in parallel using the latest date
@@ -83,17 +113,37 @@ const fetchMarketData = async () => {
       marketAnalysisApi.getHeatmap(latestDate)
     ])
 
-    // Process summary data
+    // Process summary data (KOSPI + statistics + supply_demand)
     if (summaryResponse && summaryResponse.data) {
       const summary = summaryResponse.data
-      heatmapStats.value = {
-        totalStocks: summary.statistics.total || 30,
-        buyCandidate: summary.statistics.buy_candidate || 0,
-        sellCandidate: summary.statistics.sell_candidate || 0,
-        neutral: summary.statistics.neutral || 0
+
+      // KOSPI 정보
+      if (summary.kospi) {
+        kospiInfo.value = {
+          index: summary.kospi.index ?? null,
+          change_rate: summary.kospi.change_rate ?? null,
+          volume: summary.kospi.volume ?? null
+        }
+      }
+
+      // 통계 정보
+      if (summary.statistics) {
+        heatmapStats.value = {
+          totalStocks: summary.statistics.total ?? 30,
+          buyCandidate: summary.statistics.buy_candidate ?? 0,
+          sellCandidate: summary.statistics.sell_candidate ?? 0,
+          neutral: summary.statistics.neutral ?? 0
+        }
+      }
+
+      // 수급 정보
+      if (summary.supply_demand) {
+        supplyDemand.value = {
+          foreign_net_buy: summary.supply_demand.foreign_net_buy ?? null,
+          institutional_net_buy: summary.supply_demand.institutional_net_buy ?? null
+        }
       }
     } else {
-      // No summary data available
       console.warn('Market summary data is empty for date:', latestDate)
     }
 
@@ -102,23 +152,24 @@ const fetchMarketData = async () => {
       const stocks = heatmapResponse.data.stocks
       heatmapData.value = stocks
 
-      // Calculate insights
+      // 백엔드 summary 활용 (옵셔널)
+      heatmapSummary.value = heatmapResponse.data.summary || null
+
+      // Calculate insights (fallback when summary missing)
       if (stocks.length > 0) {
-        // Average foreign/institutional net buy
         const totalForeignNetBuy = stocks.reduce((sum, s) => sum + (s.foreign_net_buy || 0), 0)
         const totalInstitutionalNetBuy = stocks.reduce((sum, s) => sum + (s.institutional_net_buy || 0), 0)
         const totalSentiment = stocks.reduce((sum, s) => sum + (s.sentiment_score || 0), 0)
 
         heatmapInsights.value.avgForeignNetBuy = Math.round(totalForeignNetBuy / stocks.length)
         heatmapInsights.value.avgInstitutionalNetBuy = Math.round(totalInstitutionalNetBuy / stocks.length)
-        heatmapInsights.value.avgSentiment = (totalSentiment / stocks.length).toFixed(2)
+        heatmapInsights.value.avgSentiment = Number((totalSentiment / stocks.length).toFixed(2))
 
-        // Find top stock by combined score (simplified scoring)
+        // Find top stock by combined positive factors
         let topStock = stocks[0]
         let maxScore = 0
 
         stocks.forEach(stock => {
-          // Simple scoring: positive factors
           const score = (
             (stock.foreign_net_buy > 0 ? 1 : 0) +
             (stock.institutional_net_buy > 0 ? 1 : 0) +
@@ -140,25 +191,30 @@ const fetchMarketData = async () => {
       }
     }
 
-    // Process sentiment data
+    // Process sentiment data (snake_case preserved as-is)
     if (sentimentResponse && sentimentResponse.data) {
-      marketSentiment.value = sentimentResponse.data
+      const sentiment = sentimentResponse.data
+      marketSentiment.value = {
+        score: sentiment.score ?? 0,
+        label: sentiment.label ?? '중립',
+        distribution: sentiment.distribution ?? marketSentiment.value.distribution,
+        time_range: sentiment.time_range ?? '전날 18:00 — 당일 08:50',
+        sources: sentiment.sources ?? '한경 · 매경 · 연합'
+      }
     }
 
     // Process decisions data
     if (decisionsResponse && decisionsResponse.data) {
       const decisions = decisionsResponse.data
 
-      // Check if we have actual decision data
-      const hasBuyData = decisions.buy_top3.some(s => s.stock_code !== null)
-      const hasSellData = decisions.sell_top3.some(s => s.stock_code !== null)
+      const hasBuyData = (decisions.buy_top3 || []).some(s => s.stock_code !== null)
+      const hasSellData = (decisions.sell_top3 || []).some(s => s.stock_code !== null)
 
       if (!hasBuyData && !hasSellData) {
         console.warn('AI trade decisions are empty for date:', latestDate)
       }
 
-      // Map buy TOP3
-      buyTop3.value = decisions.buy_top3.map(stock => ({
+      buyTop3.value = (decisions.buy_top3 || []).map(stock => ({
         rank: stock.rank,
         icon: getStockIcon(stock.stock_name),
         iconBg: getIconBg(stock.rank),
@@ -170,8 +226,7 @@ const fetchMarketData = async () => {
         isEmpty: !stock.stock_code
       }))
 
-      // Map sell TOP3
-      sellTop3.value = decisions.sell_top3.map(stock => ({
+      sellTop3.value = (decisions.sell_top3 || []).map(stock => ({
         rank: stock.rank,
         icon: getStockIcon(stock.stock_name),
         iconBg: getIconBg(stock.rank),
@@ -225,6 +280,7 @@ const toggleTop3 = (type) => {
 }
 
 const formatNumber = (num) => {
+  if (num === null || num === undefined) return '—'
   if (num === 0) return '0'
   const absNum = Math.abs(num)
   if (absNum >= 100000000) {
@@ -234,6 +290,106 @@ const formatNumber = (num) => {
   }
   return num.toLocaleString()
 }
+
+const formatKospiIndex = (value) => {
+  if (!Number.isFinite(value)) return '—'
+  return value.toLocaleString('ko-KR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })
+}
+
+const formatVolume = (value) => {
+  if (value === null || value === undefined) return '—'
+  const absNum = Math.abs(value)
+  if (absNum >= 100000000) {
+    return `${(value / 100000000).toFixed(1)}억`
+  } else if (absNum >= 10000) {
+    return `${(value / 10000).toFixed(1)}만`
+  }
+  return value.toLocaleString()
+}
+
+// 히트맵 셀 색상 계산
+const getFeatureColor = (value, feature) => {
+  if (value === null || value === undefined || isNaN(value)) {
+    return 'rgba(128,128,128,0.1)'
+  }
+
+  let normalized
+  if (feature === 'foreign_net_buy' || feature === 'institutional_net_buy') {
+    normalized = Math.tanh(value / 100000000)
+  } else if (feature === 'sentiment_score') {
+    normalized = Math.max(-1, Math.min(1, value))
+  } else if (feature === 'price_trend' || feature === 'volume_trend') {
+    normalized = Math.tanh(value * 10)
+  } else if (feature === 'vol_avg_multiple') {
+    normalized = Math.tanh((value - 1) * 2)
+  } else if (feature === 'morning_return') {
+    normalized = Math.tanh(value / 3)
+  } else {
+    normalized = 0
+  }
+
+  const intensity = Math.min(Math.abs(normalized), 1) * 0.7 + 0.1
+  if (normalized > 0) {
+    return `rgba(248, 113, 113, ${intensity})`
+  }
+  return `rgba(96, 165, 250, ${intensity})`
+}
+
+// 히트맵 셀 표시 텍스트 포맷
+const formatCellValue = (value, format) => {
+  if (value === null || value === undefined || isNaN(value)) return '—'
+
+  if (format === 'money') {
+    const absNum = Math.abs(value)
+    if (absNum >= 100000000) {
+      return `${value > 0 ? '+' : ''}${(value / 100000000).toFixed(1)}억`
+    } else if (absNum >= 10000) {
+      return `${value > 0 ? '+' : ''}${(value / 10000).toFixed(0)}만`
+    }
+    return value.toLocaleString()
+  } else if (format === 'decimal') {
+    return value.toFixed(2)
+  } else if (format === 'percent') {
+    return `${value > 0 ? '+' : ''}${(value * 100).toFixed(1)}%`
+  } else if (format === 'multiple') {
+    return `${value.toFixed(2)}x`
+  }
+  return String(value)
+}
+
+// 표시용 인사이트 (백엔드 summary 우선, fallback은 클라이언트 계산)
+const displayInsights = computed(() => {
+  if (heatmapSummary.value) {
+    return {
+      avgForeignNetBuy: heatmapSummary.value.avg_foreign_net_buy ?? 0,
+      avgInstitutionalNetBuy: heatmapSummary.value.avg_institutional_net_buy ?? 0,
+      avgSentiment: Number((heatmapSummary.value.avg_sentiment_score ?? 0).toFixed(2)),
+      positiveSentimentCount: heatmapSummary.value.positive_sentiment_count ?? null,
+      negativeSentimentCount: heatmapSummary.value.negative_sentiment_count ?? null,
+      positiveTrendCount: heatmapSummary.value.positive_trend_count ?? null,
+      topStock: {
+        name: heatmapSummary.value.top_stock?.stock_name ?? '',
+        score: heatmapSummary.value.top_stock?.positive_features ?? 0
+      },
+      source: 'backend'
+    }
+  }
+  return {
+    avgForeignNetBuy: heatmapInsights.value.avgForeignNetBuy,
+    avgInstitutionalNetBuy: heatmapInsights.value.avgInstitutionalNetBuy,
+    avgSentiment: heatmapInsights.value.avgSentiment,
+    positiveSentimentCount: null,
+    negativeSentimentCount: null,
+    positiveTrendCount: null,
+    topStock: heatmapInsights.value.topStock,
+    source: 'client'
+  }
+})
+
+const hasHeatmapData = computed(() => heatmapData.value.length > 0)
 
 const goBack = () => {
   router.push('/bot')
@@ -255,56 +411,107 @@ onMounted(() => {
       </template>
     </AppHeader>
 
-    <div class="content">
+    <!-- 로딩 / 에러 / 빈 데이터 처리 -->
+    <div v-if="loading" class="state-wrapper">
+      <div class="state-message">분석 데이터를 불러오는 중...</div>
+    </div>
+
+    <div v-else-if="error" class="state-wrapper">
+      <div class="state-message error">{{ error }}</div>
+    </div>
+
+    <div v-else class="content">
+      <!-- ⓘ KOSPI 시장 개요 -->
+      <div class="analysis-section">
+        <div class="section-label">KOSPI 시장 개요</div>
+        <div class="section-card">
+          <div class="kospi-block">
+            <div class="kospi-main">
+              <div class="kospi-label">KOSPI 지수</div>
+              <div class="kospi-value">{{ formatKospiIndex(kospiInfo.index) }}</div>
+              <div
+                v-if="Number.isFinite(kospiInfo.change_rate)"
+                :class="['kospi-change', kospiInfo.change_rate >= 0 ? 'up' : 'dn']"
+              >
+                {{ kospiInfo.change_rate > 0 ? '+' : '' }}{{ kospiInfo.change_rate.toFixed(2) }}%
+              </div>
+            </div>
+
+            <div class="kospi-side">
+              <div class="kospi-side-row">
+                <span class="side-label">거래량</span>
+                <span class="side-value">{{ formatVolume(kospiInfo.volume) }}</span>
+              </div>
+              <div class="kospi-side-row">
+                <span class="side-label">외국인 순매수</span>
+                <span
+                  :class="['side-value', supplyDemand.foreign_net_buy === null ? '' : supplyDemand.foreign_net_buy >= 0 ? 'up' : 'dn']"
+                >
+                  {{ supplyDemand.foreign_net_buy === null ? '—' : (supplyDemand.foreign_net_buy > 0 ? '+' : '') + formatNumber(supplyDemand.foreign_net_buy) + '원' }}
+                </span>
+              </div>
+              <div class="kospi-side-row">
+                <span class="side-label">기관 순매수</span>
+                <span
+                  :class="['side-value', supplyDemand.institutional_net_buy === null ? '' : supplyDemand.institutional_net_buy >= 0 ? 'up' : 'dn']"
+                >
+                  {{ supplyDemand.institutional_net_buy === null ? '—' : (supplyDemand.institutional_net_buy > 0 ? '+' : '') + formatNumber(supplyDemand.institutional_net_buy) + '원' }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- ① 30종목 피처 히트맵 -->
       <div class="analysis-section">
         <div class="section-label">30종목 피처 히트맵</div>
         <div class="section-card">
-          <div class="chart-container">
-            <svg class="chart-placeholder" viewBox="0 0 800 400" xmlns="http://www.w3.org/2000/svg">
-              <!-- Background grid -->
-              <defs>
-                <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-                  <rect width="40" height="40" fill="none" stroke="rgba(255,255,255,0.03)" stroke-width="1"/>
-                </pattern>
-              </defs>
-              <rect width="800" height="400" fill="#141b2b"/>
-              <rect width="800" height="400" fill="url(#grid)"/>
-
-              <!-- Heatmap simulation -->
-              <g opacity="0.6">
-                <rect x="50" y="30" width="700" height="340" fill="none" stroke="rgba(167,139,250,0.2)" stroke-width="1"/>
-                <!-- Random colored cells to simulate heatmap -->
-                <rect x="100" y="60" width="50" height="30" fill="#f87171" opacity="0.4"/>
-                <rect x="200" y="60" width="50" height="30" fill="#60a5fa" opacity="0.3"/>
-                <rect x="300" y="60" width="50" height="30" fill="#34d399" opacity="0.5"/>
-                <rect x="400" y="60" width="50" height="30" fill="#fbbf24" opacity="0.4"/>
-                <rect x="500" y="60" width="50" height="30" fill="#f87171" opacity="0.6"/>
-                <rect x="600" y="60" width="50" height="30" fill="#2dd4bf" opacity="0.4"/>
-
-                <rect x="100" y="120" width="50" height="30" fill="#60a5fa" opacity="0.3"/>
-                <rect x="200" y="120" width="50" height="30" fill="#f87171" opacity="0.5"/>
-                <rect x="300" y="120" width="50" height="30" fill="#fbbf24" opacity="0.4"/>
-                <rect x="400" y="120" width="50" height="30" fill="#34d399" opacity="0.6"/>
-                <rect x="500" y="120" width="50" height="30" fill="#2dd4bf" opacity="0.5"/>
-                <rect x="600" y="120" width="50" height="30" fill="#60a5fa" opacity="0.4"/>
-
-                <rect x="100" y="180" width="50" height="30" fill="#34d399" opacity="0.4"/>
-                <rect x="200" y="180" width="50" height="30" fill="#2dd4bf" opacity="0.5"/>
-                <rect x="300" y="180" width="50" height="30" fill="#f87171" opacity="0.6"/>
-                <rect x="400" y="180" width="50" height="30" fill="#60a5fa" opacity="0.3"/>
-                <rect x="500" y="180" width="50" height="30" fill="#fbbf24" opacity="0.4"/>
-                <rect x="600" y="180" width="50" height="30" fill="#f87171" opacity="0.5"/>
-              </g>
-
-              <!-- Label -->
-              <text x="400" y="200" font-family="monospace" font-size="14" fill="#94a3b8" text-anchor="middle" opacity="0.6">
-                11개 피처 × 30종목 히트맵
-              </text>
-            </svg>
-            <span class="chart-badge">matplotlib · 11개 피처 × 30종목</span>
+          <div v-if="!hasHeatmapData" class="empty-block">
+            분석 데이터가 없습니다
           </div>
 
+          <template v-else>
+            <!-- 실제 히트맵 매트릭스 (Top 10 × 5 피처) -->
+            <div class="heatmap-section">
+              <div class="heatmap-header-bar">
+                <span class="heatmap-title">상위 10종목 × 5개 피처</span>
+                <span class="heatmap-legend">
+                  <span class="legend-chip up"></span> 양호
+                  <span class="legend-chip dn"></span> 부진
+                </span>
+              </div>
+
+              <div class="heatmap-matrix">
+                <!-- Header row -->
+                <div class="heatmap-header">종목</div>
+                <div
+                  v-for="feature in heatmapFeatures"
+                  :key="feature.key"
+                  class="heatmap-header"
+                >
+                  {{ feature.label }}
+                </div>
+
+                <!-- Stock rows -->
+                <template v-for="stock in topHeatmapStocks" :key="stock.stock_code">
+                  <div class="heatmap-stock-name" :title="stock.stock_name">
+                    {{ stock.stock_name }}
+                  </div>
+                  <div
+                    v-for="feature in heatmapFeatures"
+                    :key="`${stock.stock_code}-${feature.key}`"
+                    class="heatmap-cell"
+                    :style="{ background: getFeatureColor(stock[feature.key], feature.key) }"
+                  >
+                    {{ formatCellValue(stock[feature.key], feature.format) }}
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
+
+          <!-- 통계 그리드 -->
           <div class="stats-grid">
             <div class="stat-box">
               <div class="stat-label">분석<br>종목</div>
@@ -324,29 +531,52 @@ onMounted(() => {
             </div>
           </div>
 
-          <!-- 추가 인사이트 -->
+          <!-- 인사이트 (백엔드 summary 또는 클라이언트 계산) -->
           <div class="insights-section">
             <div class="insight-row">
               <span class="insight-label">평균 외국인 순매수</span>
-              <span :class="['insight-value', heatmapInsights.avgForeignNetBuy > 0 ? 'up' : 'dn']">
-                {{ heatmapInsights.avgForeignNetBuy > 0 ? '+' : '' }}{{ formatNumber(heatmapInsights.avgForeignNetBuy) }}원
+              <span :class="['insight-value', displayInsights.avgForeignNetBuy > 0 ? 'up' : displayInsights.avgForeignNetBuy < 0 ? 'dn' : '']">
+                {{ displayInsights.avgForeignNetBuy > 0 ? '+' : '' }}{{ formatNumber(displayInsights.avgForeignNetBuy) }}원
               </span>
             </div>
             <div class="insight-row">
               <span class="insight-label">평균 기관 순매수</span>
-              <span :class="['insight-value', heatmapInsights.avgInstitutionalNetBuy > 0 ? 'up' : 'dn']">
-                {{ heatmapInsights.avgInstitutionalNetBuy > 0 ? '+' : '' }}{{ formatNumber(heatmapInsights.avgInstitutionalNetBuy) }}원
+              <span :class="['insight-value', displayInsights.avgInstitutionalNetBuy > 0 ? 'up' : displayInsights.avgInstitutionalNetBuy < 0 ? 'dn' : '']">
+                {{ displayInsights.avgInstitutionalNetBuy > 0 ? '+' : '' }}{{ formatNumber(displayInsights.avgInstitutionalNetBuy) }}원
               </span>
             </div>
             <div class="insight-row">
               <span class="insight-label">평균 감성 점수</span>
-              <span :class="['insight-value', heatmapInsights.avgSentiment > 0 ? 'up' : 'dn']">
-                {{ heatmapInsights.avgSentiment > 0 ? '+' : '' }}{{ heatmapInsights.avgSentiment }}
+              <span :class="['insight-value', displayInsights.avgSentiment > 0 ? 'up' : displayInsights.avgSentiment < 0 ? 'dn' : '']">
+                {{ displayInsights.avgSentiment > 0 ? '+' : '' }}{{ displayInsights.avgSentiment }}
               </span>
             </div>
+            <div
+              v-if="displayInsights.positiveSentimentCount !== null"
+              class="insight-row"
+            >
+              <span class="insight-label">긍정/부정 감성 종목</span>
+              <span class="insight-value">
+                <span class="up">{{ displayInsights.positiveSentimentCount }}</span>
+                /
+                <span class="dn">{{ displayInsights.negativeSentimentCount }}</span>
+              </span>
+            </div>
+            <div
+              v-if="displayInsights.positiveTrendCount !== null"
+              class="insight-row"
+            >
+              <span class="insight-label">상승 추세 종목</span>
+              <span class="insight-value up">{{ displayInsights.positiveTrendCount }}개</span>
+            </div>
             <div class="insight-row highlight">
-              <span class="insight-label">💎 최고 점수 종목</span>
-              <span class="insight-value highlight">{{ heatmapInsights.topStock.name || '분석중' }}</span>
+              <span class="insight-label">최고 점수 종목</span>
+              <span class="insight-value highlight">
+                {{ displayInsights.topStock.name || '분석중' }}
+                <span v-if="displayInsights.topStock.score" class="highlight-score">
+                  ({{ displayInsights.topStock.score }}/5)
+                </span>
+              </span>
             </div>
           </div>
         </div>
@@ -377,9 +607,9 @@ onMounted(() => {
             <div
               v-for="stock in buyTop3"
               :key="stock.rank"
-              class="stock-row"
+              :class="['stock-row', { empty: stock.isEmpty }]"
             >
-              <div class="rank-badge buy">{{ stock.rank }}</div>
+              <div class="rank-badge buy">{{ stock.rank ?? '—' }}</div>
               <div
                 class="stock-icon"
                 :style="{ background: stock.iconBg, color: stock.iconColor }"
@@ -391,7 +621,7 @@ onMounted(() => {
                 <div v-if="stock.reason" class="stock-reason">{{ stock.reason }}</div>
               </div>
               <div :class="['stock-score', stock.scoreClass]">
-                {{ stock.score }}
+                {{ stock.score !== null && stock.score !== undefined ? stock.score : '—' }}
               </div>
             </div>
           </div>
@@ -403,7 +633,7 @@ onMounted(() => {
               :key="stock.rank"
               :class="['stock-row', { empty: stock.isEmpty }]"
             >
-              <div class="rank-badge sell">{{ stock.rank }}</div>
+              <div class="rank-badge sell">{{ stock.rank ?? '—' }}</div>
               <div
                 class="stock-icon"
                 :style="{ background: stock.iconBg, color: stock.iconColor }"
@@ -415,7 +645,7 @@ onMounted(() => {
                 <div v-if="stock.reason" class="stock-reason">{{ stock.reason }}</div>
               </div>
               <div :class="['stock-score', stock.scoreClass]">
-                {{ stock.score !== null ? stock.score : '—' }}
+                {{ stock.score !== null && stock.score !== undefined ? stock.score : '—' }}
               </div>
             </div>
           </div>
@@ -479,7 +709,7 @@ onMounted(() => {
             <div class="collection-info">
               <div class="info-item">
                 <div class="info-label">수집 범위</div>
-                <div class="info-value">{{ marketSentiment.timeRange }}</div>
+                <div class="info-value">{{ marketSentiment.time_range }}</div>
               </div>
               <div class="info-item align-right">
                 <div class="info-label">뉴스 출처</div>
@@ -551,6 +781,31 @@ onMounted(() => {
   gap: var(--spacing-lg);
 }
 
+/* State Wrapper */
+.state-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+  padding: var(--spacing-lg);
+}
+
+.state-message {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.state-message.error {
+  color: #f87171;
+}
+
+.empty-block {
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}
+
 /* Section Label */
 .section-label {
   font-size: 10.5px;
@@ -581,32 +836,157 @@ onMounted(() => {
   overflow: hidden;
 }
 
-/* Chart Container */
-.chart-container {
-  position: relative;
+/* KOSPI Block */
+.kospi-block {
+  padding: var(--spacing-md);
+  display: grid;
+  grid-template-columns: 1fr 1.2fr;
+  gap: var(--spacing-md);
+  align-items: center;
+}
+
+.kospi-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.kospi-label {
+  font-size: 9.5px;
+  color: var(--color-text-tertiary);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.kospi-value {
+  font-size: 26px;
+  font-weight: var(--font-weight-bold);
+  font-family: 'DM Mono', monospace;
+  color: var(--color-text-primary);
+  line-height: 1.1;
+  margin-top: 4px;
+}
+
+.kospi-change {
+  font-size: 12px;
+  font-weight: var(--font-weight-semibold);
+  font-family: 'DM Mono', monospace;
+  margin-top: 2px;
+}
+
+.kospi-change.up { color: #f87171; }
+.kospi-change.dn { color: #60a5fa; }
+
+.kospi-side {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: var(--spacing-md);
+  border-left: 1px solid var(--color-border);
+}
+
+.kospi-side-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+}
+
+.side-label {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+}
+
+.side-value {
+  font-size: 11px;
+  font-weight: var(--font-weight-semibold);
+  font-family: 'DM Mono', monospace;
+  color: var(--color-text-primary);
+}
+
+.side-value.up { color: #f87171; }
+.side-value.dn { color: #60a5fa; }
+
+/* Heatmap Section */
+.heatmap-section {
   padding: var(--spacing-md);
 }
 
-.chart-placeholder {
-  width: 100%;
-  display: block;
-  border-radius: var(--radius-md);
-  background: #141b2b;
-  min-height: 180px;
+.heatmap-header-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--spacing-sm);
 }
 
-.chart-badge {
-  position: absolute;
-  top: 20px;
-  left: 20px;
-  font-size: 9px;
+.heatmap-title {
+  font-size: 10.5px;
   color: var(--color-text-secondary);
-  background: rgba(8, 12, 20, 0.8);
-  backdrop-filter: blur(8px);
-  border: 1px solid var(--color-border);
-  padding: 3px 8px;
-  border-radius: 6px;
+  font-weight: var(--font-weight-semibold);
+}
+
+.heatmap-legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9px;
+  color: var(--color-text-tertiary);
   font-family: 'DM Mono', monospace;
+}
+
+.legend-chip {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-left: 4px;
+}
+
+.legend-chip.up { background: rgba(248, 113, 113, 0.65); }
+.legend-chip.dn { background: rgba(96, 165, 250, 0.65); }
+
+.heatmap-matrix {
+  display: grid;
+  grid-template-columns: 70px repeat(5, 1fr);
+  gap: 2px;
+  font-size: 9px;
+}
+
+.heatmap-cell {
+  padding: 6px 4px;
+  text-align: center;
+  border-radius: 3px;
+  font-family: 'DM Mono', monospace;
+  font-size: 9px;
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.heatmap-header {
+  font-weight: 600;
+  color: var(--color-text-tertiary);
+  padding: 4px 2px;
+  font-size: 9.5px;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.heatmap-stock-name {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 4px 2px;
+  text-align: left;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
 }
 
 /* Stats Grid */
@@ -614,8 +994,7 @@ onMounted(() => {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 6px;
-  padding: var(--spacing-md);
-  padding-top: var(--spacing-sm);
+  padding: 0 var(--spacing-md) var(--spacing-sm);
 }
 
 .stat-box {
@@ -695,6 +1074,12 @@ onMounted(() => {
 .insight-value.highlight {
   color: var(--color-primary);
   font-size: 12px;
+}
+
+.highlight-score {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  margin-left: 4px;
 }
 
 /* TOP3 Toggle */
