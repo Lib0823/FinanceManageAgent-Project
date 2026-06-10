@@ -21,6 +21,9 @@ public class MarketHeatmapResponse {
     @JsonProperty("stocks")
     private List<StockFeatures> stocks;
 
+    @JsonProperty("summary")
+    private HeatmapSummary summary;
+
     @Data
     @Builder
     @NoArgsConstructor
@@ -75,5 +78,47 @@ public class MarketHeatmapResponse {
 
         @JsonProperty("price_uncertainty")
         private BigDecimal priceUncertainty;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class HeatmapSummary {
+        @JsonProperty("avg_foreign_net_buy")
+        private Long avgForeignNetBuy;
+
+        @JsonProperty("avg_institutional_net_buy")
+        private Long avgInstitutionalNetBuy;
+
+        @JsonProperty("avg_sentiment_score")
+        private BigDecimal avgSentimentScore;
+
+        @JsonProperty("positive_sentiment_count")
+        private Integer positiveSentimentCount;
+
+        @JsonProperty("negative_sentiment_count")
+        private Integer negativeSentimentCount;
+
+        @JsonProperty("positive_trend_count")
+        private Integer positiveTrendCount;
+
+        @JsonProperty("top_stock")
+        private TopStock topStock;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class TopStock {
+        @JsonProperty("stock_code")
+        private String stockCode;
+
+        @JsonProperty("stock_name")
+        private String stockName;
+
+        @JsonProperty("positive_features")
+        private Integer positiveFeatures;
     }
 }

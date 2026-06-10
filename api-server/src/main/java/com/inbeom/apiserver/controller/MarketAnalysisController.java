@@ -29,7 +29,7 @@ public class MarketAnalysisController {
     ) {
         log.info("GET /api/market/summary - date: {}", date);
 
-        LocalDate targetDate = date != null ? date : LocalDate.now();
+        LocalDate targetDate = marketAnalysisService.resolveDate(date);
         MarketSummaryResponse response = marketAnalysisService.getMarketSummary(targetDate);
 
         return ResponseEntity.ok(ApiResponse.success(response));
@@ -45,7 +45,7 @@ public class MarketAnalysisController {
     ) {
         log.info("GET /api/market/sentiment - date: {}", date);
 
-        LocalDate targetDate = date != null ? date : LocalDate.now();
+        LocalDate targetDate = marketAnalysisService.resolveDate(date);
         MarketSentimentResponse response = marketAnalysisService.getMarketSentiment(targetDate);
 
         return ResponseEntity.ok(ApiResponse.success(response));
@@ -61,7 +61,7 @@ public class MarketAnalysisController {
     ) {
         log.info("GET /api/market/decisions - date: {}", date);
 
-        LocalDate targetDate = date != null ? date : LocalDate.now();
+        LocalDate targetDate = marketAnalysisService.resolveDate(date);
         MarketDecisionsResponse response = marketAnalysisService.getMarketDecisions(targetDate);
 
         return ResponseEntity.ok(ApiResponse.success(response));
@@ -90,7 +90,7 @@ public class MarketAnalysisController {
     ) {
         log.info("GET /api/market/heatmap - date: {}", date);
 
-        LocalDate targetDate = date != null ? date : LocalDate.now();
+        LocalDate targetDate = marketAnalysisService.resolveDate(date);
         MarketHeatmapResponse response = marketAnalysisService.getHeatmapData(targetDate);
 
         return ResponseEntity.ok(ApiResponse.success(response));

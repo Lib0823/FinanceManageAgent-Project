@@ -50,9 +50,9 @@ public class MarketAnalysisRepository {
         String sql = """
             SELECT
                 COUNT(*) FILTER (WHERE is_selected = true) as total_stocks,
-                COUNT(*) FILTER (WHERE atd.decision = 'buy') as buy_candidate,
-                COUNT(*) FILTER (WHERE atd.decision = 'sell') as sell_candidate,
-                COUNT(*) FILTER (WHERE atd.decision IS NULL OR atd.decision = 'hold') as neutral
+                COUNT(*) FILTER (WHERE LOWER(atd.decision) = 'buy') as buy_candidate,
+                COUNT(*) FILTER (WHERE LOWER(atd.decision) = 'sell') as sell_candidate,
+                COUNT(*) FILTER (WHERE atd.decision IS NULL OR LOWER(atd.decision) = 'hold') as neutral
             FROM stock_filter_score sfs
             LEFT JOIN ai_trade_decision atd
                 ON sfs.stock_code = atd.stock_code
@@ -68,7 +68,7 @@ public class MarketAnalysisRepository {
      * 시장 감성 분석 데이터 조회
      */
     public Map<String, Object> getMarketSentiment(LocalDate date) {
-        // 시장 전체 감성 점수 조회 (stock_code IS NULL)
+        // 시장 전체 감성 점수 조회 (stock_code IS NULL) - 없을 수 있음
         String sentimentSql = """
             SELECT sentiment_score
             FROM news_analysis
@@ -77,12 +77,9 @@ public class MarketAnalysisRepository {
             """;
 
         List<BigDecimal> sentimentResults = jdbcTemplate.queryForList(sentimentSql, BigDecimal.class, date);
-        if (sentimentResults.isEmpty()) {
-            return null;
-        }
-        BigDecimal sentimentScore = sentimentResults.get(0);
+        BigDecimal sentimentScore = sentimentResults.isEmpty() ? null : sentimentResults.get(0);
 
-        // 종목별 감성 분포 조회
+        // 종목별 감성 분포 조회 (Top30 종목 기준) - 없을 수 있음
         String distributionSql = """
             SELECT
                 COUNT(*) FILTER (WHERE na.sentiment_score >= 0.3) as positive_count,
@@ -101,10 +98,19 @@ public class MarketAnalysisRepository {
         List<Map<String, Object>> distributionResults = jdbcTemplate.queryForList(distributionSql, date);
         Map<String, Object> distribution = distributionResults.isEmpty() ? null : distributionResults.get(0);
 
-        Map<String, Object> result = new HashMap<>();
-        result.put("sentiment_score", sentimentScore);
-        result.put("distribution", distribution);
+        // 분포에 종목이 하나도 없으면 distribution은 비어있는 것으로 간주
+        boolean distributionEmpty = distribution == null
+                || distribution.get("total_count") == null
+                || ((Number) distribution.get("total_count")).intValue() == 0;
 
+        // 시장 전반 감성과 분포 둘 다 없으면 null 반환 (정말 데이터 없음)
+        if (sentimentScore == null && distributionEmpty) {
+            return null;
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("sentiment_score", sentimentScore);  // null 가능
+        result.put("distribution", distributionEmpty ? null : distribution);
         return result;
     }
 
@@ -125,7 +131,7 @@ public class MarketAnalysisRepository {
             LEFT JOIN stock_realtime_price srp
                 ON atd.stock_code = srp.stock_code
             WHERE atd.decision_date = ?
-                AND atd.decision = ?
+                AND LOWER(atd.decision) = LOWER(?)
             ORDER BY atd.rank ASC
             LIMIT 3
             """;
@@ -139,15 +145,15 @@ public class MarketAnalysisRepository {
      */
     public LocalDate getLatestAnalysisDate() {
         String sql = """
-            SELECT COALESCE(
+            SELECT GREATEST(
                 (SELECT MAX(score_date) FROM stock_filter_score WHERE is_selected = true),
                 (SELECT MAX(decision_date) FROM ai_trade_decision),
-                (SELECT MAX(analysis_date) FROM news_analysis WHERE stock_code IS NOT NULL),
-                CURRENT_DATE
+                (SELECT MAX(analysis_date) FROM news_analysis WHERE stock_code IS NOT NULL)
             ) as latest_date
             """;
 
-        return jdbcTemplate.queryForObject(sql, LocalDate.class);
+        List<LocalDate> results = jdbcTemplate.queryForList(sql, LocalDate.class);
+        return results.isEmpty() ? null : results.get(0);
     }
 
     /**
