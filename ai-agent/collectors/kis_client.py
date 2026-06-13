@@ -408,6 +408,233 @@ class KISClient:
                 logger.error(f"Failed to fetch OHLCV for {stock_code}: {e}")
             return pd.DataFrame()
 
+    async def get_daily_ohlcv_period(
+        self,
+        stock_code: str,
+        days: int = 120
+    ) -> pd.DataFrame:
+        """
+        기간별 일봉 OHLCV 조회 (장기 시계열용, 최근 ~100거래일).
+
+        FHKST01010400(inquire-daily-price)은 한 번에 최대 ~30건만 반환하므로
+        Prophet 학습에는 부족하다. 본 메서드는 기간 지정이 가능한
+        FHKST03010100(inquire-daily-itemchartprice, [국내주식] 기본시세 >
+        국내주식기간별시세(일/주/월/년) v1_국내주식-016)을 사용한다.
+
+        설계 정정(6/12 장애 대응):
+        과거 구현은 달력일 윈도우를 여러 번 쪼개 페이지네이션했고, 그 결과
+        `20251208~20260110` 같은 어긋난 구간을 만들어 KIS가 500을 반복 반환했다.
+        공식 문서/샘플에 따르면 본 엔드포인트는 단일 호출에서 [DATE_1, DATE_2] 구간 중
+        "가장 최근 최대 100건"을 반환한다(예시: 20220101~20220809 → 최근 100건).
+        따라서 충분히 넓은 단일 윈도우(오늘로부터 충분한 달력일 전 ~ 오늘)로 1회만
+        호출하여 최근 100거래일을 안전하게 확보한다. FID_INPUT_DATE_2는 결코 미래일이
+        될 수 없도록 항상 '오늘'로 고정한다.
+
+        Args:
+            stock_code: 6-digit stock code
+            days: 확보 희망 거래일 수 (기본 120, 실제 상한은 엔드포인트 한도 ~100건)
+
+        Returns:
+            get_daily_ohlcv와 동일한 컬럼 구조의 DataFrame (oldest first):
+                - trade_date: 거래일 (YYYYMMDD)
+                - open: 시가
+                - high: 고가
+                - low: 저가
+                - close: 종가
+                - volume: 거래량
+
+            API 오류·휴장 시 빈 DataFrame 반환(상위에서 get_daily_ohlcv로 폴백).
+
+        Note:
+            종목당 API 호출 비용: 1회.
+        """
+        endpoint = '/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice'
+        tr_id = 'FHKST03010100'
+
+        from datetime import datetime as _dt, timedelta as _td
+
+        # 단일 윈도우: 오늘 ~ (오늘 − 충분한 달력일). 거래일 ≈ 0.7 × 달력일이므로
+        # 100거래일(엔드포인트 한도)을 덮으려면 ~150 달력일이면 충분하다. 미래일 방지를
+        # 위해 종료일은 항상 오늘로 고정한다.
+        end_dt = _dt.now()
+        total_calendar_days_needed = int(max(days, 100) / 0.7) + 20
+        start_dt = end_dt - _td(days=total_calendar_days_needed)
+
+        params = {
+            'FID_COND_MRKT_DIV_CODE': 'J',
+            'FID_INPUT_ISCD': stock_code,
+            'FID_INPUT_DATE_1': start_dt.strftime('%Y%m%d'),
+            'FID_INPUT_DATE_2': end_dt.strftime('%Y%m%d'),  # 항상 오늘 (미래일 금지)
+            'FID_PERIOD_DIV_CODE': 'D',  # Daily
+            'FID_ORG_ADJ_PRC': '0'  # 0:수정주가
+        }
+
+        try:
+            result = await self.request('GET', endpoint, tr_id, params=params)
+        except RuntimeError as e:
+            error_str = str(e)
+            if '500' in error_str or 'Internal Server Error' in error_str:
+                logger.warning(f"Market holiday/server error for {stock_code} (period OHLCV)")
+            else:
+                logger.error(f"Failed to fetch period OHLCV for {stock_code}: {e}")
+            return pd.DataFrame()
+
+        # 기간별 시세는 일자별 배열을 output2로 반환한다
+        output_list = result.get('output2', []) or []
+
+        if not output_list:
+            logger.warning(f"No period OHLCV rows for {stock_code}")
+            return pd.DataFrame()
+
+        collected: Dict[str, Dict] = {}
+        for item in output_list:
+            trade_date = item.get('stck_bsop_date')
+            # 빈 행(주말 등) 또는 결측 행 스킵
+            if not trade_date or not item.get('stck_clpr'):
+                continue
+            if trade_date in collected:
+                continue
+            try:
+                collected[trade_date] = {
+                    'trade_date': trade_date,
+                    'open': int(item['stck_oprc']),
+                    'high': int(item['stck_hgpr']),
+                    'low': int(item['stck_lwpr']),
+                    'close': int(item['stck_clpr']),
+                    'volume': int(item['acml_vol'])
+                }
+            except (ValueError, KeyError, TypeError) as parse_err:
+                logger.debug(f"Skipping malformed period OHLCV row for {stock_code}: {parse_err}")
+                continue
+
+        if not collected:
+            logger.warning(f"No period OHLCV data assembled for {stock_code}")
+            return pd.DataFrame()
+
+        df = pd.DataFrame(list(collected.values()))
+        df = df.sort_values('trade_date').reset_index(drop=True)  # Oldest first
+
+        # 최근 days 거래일만 유지
+        if len(df) > days:
+            df = df.tail(days).reset_index(drop=True)
+
+        logger.debug(f"Assembled {len(df)} trading days of period OHLCV for {stock_code}")
+
+        return df
+
+    async def get_daily_trade_volume(
+        self,
+        stock_code: str,
+        days: int = 120
+    ) -> pd.DataFrame:
+        """
+        종목별 일별 매수/매도 체결량 조회 (순매수 비율 계산용).
+
+        FHKST03010800(inquire-daily-trade-volume, [국내주식] 시세분석 >
+        종목별일별매수매도체결량 v1_국내주식-056)은 일자별 총 매수체결량
+        ·총 매도체결량을 반환하며, 한 번의 호출에 최대 100건(거래일)을 조회한다.
+
+        이 값으로 일별 순매수 비율(= 매수체결량 / 총체결량)을 계산하면,
+        총 거래량만으로는 알 수 없는 "매수 주도 vs 매도 주도" 방향성을 확보한다.
+
+        파라미터 정정(6/12 장애 대응):
+        과거 구현은 FID_INPUT_DATE_1/2(기간 지정) + 직접 페이지네이션을 사용했고,
+        KIS가 `ERROR INPUT FIELD NOT FOUND [FID_COND_MRKT_DIV_CODE_1]` 또는 500을
+        반환했다. 공식 샘플(open-trading-api/.../inquire_daily_trade_volume.py)은
+        FID_COND_MRKT_DIV_CODE / FID_INPUT_ISCD / FID_PERIOD_DIV_CODE 3개 필수 필드만으로
+        호출하며 날짜는 선택(미지정 시 최근 100건 반환)이다. 본 구현은 그 정식 형태를
+        따른다(단일 호출, 날짜 미지정). 100건이면 Prophet 학습(>=60)에 충분하다.
+
+        출력 필드(공식 COLUMN_MAPPING 기준):
+        - output2(array, 일자별): stck_bsop_date, total_shnu_qty(총 매수 수량),
+          total_seln_qty(총 매도 수량)
+        - 일부 응답은 shnu_cnqn_smtn/seln_cnqn_smtn(체결량 합계)로 내려오므로
+          파서를 두 변형 모두 허용하도록 관대하게(tolerant) 처리한다.
+
+        Args:
+            stock_code: 6-digit stock code
+            days: 확보할 거래일 수 (기본 120, 실제는 엔드포인트 한도인 ~100건까지)
+
+        Returns:
+            DataFrame (oldest first), 컬럼:
+                - trade_date: 거래일 (YYYYMMDD)
+                - buy_volume: 매수 체결량
+                - sell_volume: 매도 체결량
+                - total_volume: 총 체결량 (buy_volume + sell_volume)
+
+            API 오류·휴장 시 빈 DataFrame 반환(상위에서 가격기반 프록시로 폴백).
+
+        Note:
+            종목당 API 호출 비용: 1회.
+        """
+        endpoint = '/uapi/domestic-stock/v1/quotations/inquire-daily-trade-volume'
+        tr_id = 'FHKST03010800'
+
+        # 공식 샘플과 동일한 필수 3필드만 전송 (날짜 미지정 → 최근 100건 반환).
+        # _1 접미사 필드는 KIS 내부 오류 메시지일 뿐 실제 요구 파라미터가 아니다.
+        params = {
+            'FID_COND_MRKT_DIV_CODE': 'J',  # J:KRX
+            'FID_INPUT_ISCD': stock_code,
+            'FID_PERIOD_DIV_CODE': 'D'  # Daily
+        }
+
+        try:
+            result = await self.request('GET', endpoint, tr_id, params=params)
+        except RuntimeError as e:
+            error_str = str(e)
+            if '500' in error_str or 'Internal Server Error' in error_str:
+                logger.warning(f"Market holiday/server error for {stock_code} (trade volume)")
+            else:
+                logger.error(f"Failed to fetch daily trade volume for {stock_code}: {e}")
+            return pd.DataFrame()
+
+        output_list = result.get('output2', []) or []
+
+        if not output_list:
+            logger.warning(f"No daily trade-volume rows for {stock_code}")
+            return pd.DataFrame()
+
+        def _to_int(item: Dict, *keys: str) -> int:
+            """여러 후보 키 중 처음으로 존재하는 값을 int로 변환(없으면 0)."""
+            for key in keys:
+                if key in item and item.get(key) not in (None, ''):
+                    try:
+                        return int(item.get(key))
+                    except (ValueError, TypeError):
+                        continue
+            return 0
+
+        collected: Dict[str, Dict] = {}
+        for item in output_list:
+            trade_date = item.get('stck_bsop_date')
+            if not trade_date or trade_date in collected:
+                continue
+            # 총 매수/매도 수량: total_shnu_qty/total_seln_qty 우선,
+            # 변형 응답(shnu_cnqn_smtn/seln_cnqn_smtn)도 허용
+            buy_volume = _to_int(item, 'total_shnu_qty', 'shnu_cnqn_smtn')
+            sell_volume = _to_int(item, 'total_seln_qty', 'seln_cnqn_smtn')
+
+            collected[trade_date] = {
+                'trade_date': trade_date,
+                'buy_volume': buy_volume,
+                'sell_volume': sell_volume,
+                'total_volume': buy_volume + sell_volume
+            }
+
+        if not collected:
+            logger.warning(f"No daily trade-volume data assembled for {stock_code}")
+            return pd.DataFrame()
+
+        df = pd.DataFrame(list(collected.values()))
+        df = df.sort_values('trade_date').reset_index(drop=True)  # Oldest first
+
+        if len(df) > days:
+            df = df.tail(days).reset_index(drop=True)
+
+        logger.debug(f"Assembled {len(df)} trading days of trade volume for {stock_code}")
+
+        return df
+
     async def get_minute_data(self, stock_code: str, date: str) -> pd.DataFrame:
         """
         Get minute-level price data for morning_return calculation (09:00-10:00).
