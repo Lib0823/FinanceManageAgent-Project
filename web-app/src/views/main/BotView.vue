@@ -2,9 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AppHeader from '@/components/common/AppHeader.vue'
-import StockCard from '@/components/common/StockCard.vue'
-import { userApi, tradingApi } from '@/services/api'
-import { mockBotStatus, mockBotAnalysis, mockStocks } from '@/services/mockData'
+import { userApi, tradingApi, marketAnalysisApi } from '@/services/api'
 import toast from '@/utils/toast'
 
 const router = useRouter()
@@ -96,21 +94,66 @@ const loadHoldings = async () => {
         profit: holding.profitLoss,  // 평가손익
         quantity: holding.availableQuantity,  // 매도가능수량
         avgPrice: Math.floor(holding.averagePrice || 0),  // 평균단가 (소수점 제거)
-        // AI 분석은 mock 데이터 유지
+        // AI 분석: 초기 로딩 상태로 시작, loadStockAnalyses()에서 실제 데이터로 교체
+        aiDecision: null,
+        aiRank: null,
         analysis: {
-          points: [
-            {
-              title: 'AI 분석 준비 중',
-              content: '해당 종목에 대한 상세 분석이 곧 제공될 예정입니다.'
-            }
-          ]
+          loading: true,
+          hasAnalysis: null,
+          headline: '',
+          metrics: [],
+          analysisDate: null
         }
       }))
+
+      // 보유 종목 렌더링을 막지 않도록 분석 데이터는 별도로 비동기 로딩
+      loadStockAnalyses()
     }
   } catch (error) {
     console.error('보유 종목 조회 실패:', error)
     toast.error('보유 종목 정보를 불러올 수 없습니다')
   }
+}
+
+// 보유 종목별 AI 분석을 병렬로 조회하여 카드에 채워 넣음
+const loadStockAnalyses = async () => {
+  await Promise.all(
+    botStocks.value.map(async (stock) => {
+      try {
+        const res = await marketAnalysisApi.getStockAnalysis(stock.symbol)
+
+        if (res && res.success && res.data) {
+          stock.analysis = {
+            loading: false,
+            hasAnalysis: res.data.has_analysis,
+            headline: res.data.headline,
+            metrics: Array.isArray(res.data.metrics) ? res.data.metrics : [],
+            analysisDate: res.data.analysis_date
+          }
+        } else {
+          stock.analysis = {
+            loading: false,
+            hasAnalysis: false,
+            headline: 'AI 분석을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.',
+            metrics: [],
+            analysisDate: null
+          }
+        }
+      } catch (error) {
+        console.error(`AI 분석 조회 실패 (${stock.symbol}):`, error)
+        stock.analysis = {
+          loading: false,
+          hasAnalysis: false,
+          headline: 'AI 분석을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.',
+          metrics: [],
+          analysisDate: null
+        }
+      }
+    })
+  )
+
+  // botStocks.value는 plain object 배열이므로, 배열 참조를 교체해 카드 재렌더링을 보장
+  botStocks.value = [...botStocks.value]
 }
 
 const openSettings = () => {
@@ -433,16 +476,26 @@ const isStockExpanded = (symbol) => {
                 <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" stroke="#F59E0B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
               <span class="analysis-title">AI 분석</span>
+              <span v-if="stock.analysis.analysisDate" class="analysis-date">
+                ({{ stock.analysis.analysisDate }} 기준)
+              </span>
             </div>
-            <div class="analysis-points">
-              <div v-for="(point, index) in stock.analysis.points" :key="index" class="analysis-point">
-                <div class="point-header">
-                  <div class="point-bullet"></div>
-                  <h4 class="point-title">{{ point.title }}</h4>
+            <div v-if="stock.analysis.loading" class="analysis-loading">
+              AI 분석 불러오는 중...
+            </div>
+            <template v-else>
+              <p class="analysis-headline">{{ stock.analysis.headline }}</p>
+              <div v-if="stock.analysis.metrics.length > 0" class="metric-table">
+                <div
+                  v-for="(metric, index) in stock.analysis.metrics"
+                  :key="index"
+                  class="metric-row"
+                >
+                  <span class="metric-label">{{ metric.label }}</span>
+                  <span class="metric-value" :class="`tone-${metric.tone}`">{{ metric.value }}</span>
                 </div>
-                <p class="point-content">{{ point.content }}</p>
               </div>
-            </div>
+            </template>
           </div>
 
           <!-- Action Buttons -->
@@ -1007,45 +1060,68 @@ const isStockExpanded = (symbol) => {
   color: #F59E0B;
 }
 
-.analysis-points {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-md);
-}
-
-.analysis-point {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-xs);
-}
-
-.point-header {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-xs);
-}
-
-.point-bullet {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #F59E0B;
-  flex-shrink: 0;
-}
-
-.point-title {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-primary);
-  margin: 0;
-}
-
-.point-content {
+.analysis-date {
   font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
+  color: var(--color-text-tertiary);
+  font-weight: var(--font-weight-medium);
+}
+
+.analysis-headline {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
   line-height: 1.6;
   margin: 0;
-  padding-left: 14px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.metric-table {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-xs) var(--spacing-md);
+  margin-top: var(--spacing-md);
+  padding-top: var(--spacing-md);
+  border-top: 1px solid rgba(245, 158, 11, 0.2);
+}
+
+.metric-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  min-width: 0;
+}
+
+.metric-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+.metric-value {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  text-align: right;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.metric-value.tone-positive {
+  color: var(--color-stock-up);
+}
+
+.metric-value.tone-negative {
+  color: var(--color-stock-down);
+}
+
+.metric-value.tone-neutral {
+  color: var(--color-text-secondary);
+}
+
+.analysis-loading {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  font-weight: var(--font-weight-medium);
 }
 
 /* Action Buttons */

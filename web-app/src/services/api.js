@@ -183,7 +183,9 @@ export const marketAnalysisApi = {
   getSentiment: (date) => api.get('/market/sentiment', { params: date ? { date } : {} }),
   getDecisions: (date) => api.get('/market/decisions', { params: date ? { date } : {} }),
   getLatestDate: () => api.get('/market/latest-date'),
-  getHeatmap: (date) => api.get('/market/heatmap', { params: date ? { date } : {} })
+  getHeatmap: (date) => api.get('/market/heatmap', { params: date ? { date } : {} }),
+  getStockAnalysis: (stockCode, date) =>
+    api.get(`/market/stock-analysis/${stockCode}`, { params: date ? { date } : {} })
 }
 
 export default api
