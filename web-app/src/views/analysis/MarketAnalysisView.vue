@@ -71,15 +71,39 @@ const marketSentiment = ref({
   sources: '한경 · 매경 · 연합'
 })
 
-// Top 10 종목 (실제 히트맵 매트릭스 표시용)
-const topHeatmapStocks = computed(() => heatmapData.value.slice(0, 10))
+// 5일 예측 전망 (Prophet 기반)
+const forecastOutlook = ref(null)
+
+// 펀더멘탈 분석 (DART 기반)
+const financialHealth = ref(null)
+
+// 수급 매트릭스 (스마트머니 4분면)
+const smartMoneyFlow = ref(null)
+
+// D+1~D+5 시장 평균 예측 추이
+const marketForecastTrend = ref(null)
+
+// 히트맵 전체 보기 토글 (기본: 상위 10종목 / 펼치면 최대 30종목)
+const showAllHeatmap = ref(false)
+
+// 히트맵 매트릭스 표시용 (기본 10종목, 펼치면 전체 최대 30종목)
+const topHeatmapStocks = computed(() =>
+  heatmapData.value.slice(0, showAllHeatmap.value ? 30 : 10)
+)
+
+// 현재 화면에 표시 중인 히트맵 종목 수
+const shownHeatmapCount = computed(() => topHeatmapStocks.value.length)
+
+const toggleHeatmap = () => {
+  showAllHeatmap.value = !showAllHeatmap.value
+}
 
 // 히트맵 매트릭스의 피처 컬럼 정의
 const heatmapFeatures = [
   { key: 'foreign_net_buy', label: '외국인', format: 'money' },
   { key: 'institutional_net_buy', label: '기관', format: 'money' },
   { key: 'sentiment_score', label: '감성', format: 'decimal' },
-  { key: 'price_trend', label: '추세', format: 'percent' },
+  { key: 'expected_return_5d', label: '5일 전망', format: 'expected_return' },
   { key: 'vol_avg_multiple', label: '거래량', format: 'multiple' }
 ]
 
@@ -155,6 +179,14 @@ const fetchMarketData = async () => {
       // 백엔드 summary 활용 (옵셔널)
       heatmapSummary.value = heatmapResponse.data.summary || null
 
+      // 신규: 5일 예측 전망 / 펀더멘탈 분석 / 수급 매트릭스 / 5일 평균 예측 추이
+      if (heatmapResponse.data.summary) {
+        forecastOutlook.value = heatmapResponse.data.summary.forecast_outlook || null
+        financialHealth.value = heatmapResponse.data.summary.financial_health || null
+        smartMoneyFlow.value = heatmapResponse.data.summary.smart_money_flow || null
+        marketForecastTrend.value = heatmapResponse.data.summary.market_forecast_trend || null
+      }
+
       // Calculate insights (fallback when summary missing)
       if (stocks.length > 0) {
         const totalForeignNetBuy = stocks.reduce((sum, s) => sum + (s.foreign_net_buy || 0), 0)
@@ -214,29 +246,37 @@ const fetchMarketData = async () => {
         console.warn('AI trade decisions are empty for date:', latestDate)
       }
 
-      buyTop3.value = (decisions.buy_top3 || []).map(stock => ({
-        rank: stock.rank,
-        icon: getStockIcon(stock.stock_name),
-        iconBg: getIconBg(stock.rank),
-        iconColor: getIconColor(stock.rank),
-        name: stock.stock_name,
-        reason: stock.reason || '',
-        score: stock.score,
-        scoreClass: getScoreClass(stock.score),
-        isEmpty: !stock.stock_code
-      }))
+      buyTop3.value = (decisions.buy_top3 || []).map(stock => {
+        // confidence_score가 NULL이면 0으로 도착 → 의미 없는 점수이므로 null 처리
+        const score = stock.score ? stock.score : null
+        return {
+          rank: stock.rank,
+          icon: getStockIcon(stock.stock_name),
+          iconBg: getIconBg(stock.rank),
+          iconColor: getIconColor(stock.rank),
+          name: stock.stock_name,
+          reason: stock.reason || '',
+          score,
+          scoreClass: getScoreClass(score),
+          isEmpty: !stock.stock_code
+        }
+      })
 
-      sellTop3.value = (decisions.sell_top3 || []).map(stock => ({
-        rank: stock.rank,
-        icon: getStockIcon(stock.stock_name),
-        iconBg: getIconBg(stock.rank),
-        iconColor: getIconColor(stock.rank),
-        name: stock.stock_name,
-        reason: stock.reason || '',
-        score: stock.score,
-        scoreClass: getScoreClass(stock.score),
-        isEmpty: !stock.stock_code
-      }))
+      sellTop3.value = (decisions.sell_top3 || []).map(stock => {
+        // confidence_score가 NULL이면 0으로 도착 → 의미 없는 점수이므로 null 처리
+        const score = stock.score ? stock.score : null
+        return {
+          rank: stock.rank,
+          icon: getStockIcon(stock.stock_name),
+          iconBg: getIconBg(stock.rank),
+          iconColor: getIconColor(stock.rank),
+          name: stock.stock_name,
+          reason: stock.reason || '',
+          score,
+          scoreClass: getScoreClass(score),
+          isEmpty: !stock.stock_code
+        }
+      })
     }
 
   } catch (err) {
@@ -321,6 +361,8 @@ const getFeatureColor = (value, feature) => {
     normalized = Math.tanh(value / 100000000)
   } else if (feature === 'sentiment_score') {
     normalized = Math.max(-1, Math.min(1, value))
+  } else if (feature === 'expected_return_5d') {
+    normalized = Math.tanh(value / 10)
   } else if (feature === 'price_trend' || feature === 'volume_trend') {
     normalized = Math.tanh(value * 10)
   } else if (feature === 'vol_avg_multiple') {
@@ -354,10 +396,171 @@ const formatCellValue = (value, format) => {
     return value.toFixed(2)
   } else if (format === 'percent') {
     return `${value > 0 ? '+' : ''}${(value * 100).toFixed(1)}%`
+  } else if (format === 'expected_return') {
+    return `${value > 0 ? '+' : ''}${value.toFixed(1)}%`
   } else if (format === 'multiple') {
     return `${value.toFixed(2)}x`
   }
   return String(value)
+}
+
+// 시장 감성 점수 색상/포맷 (양수=빨강, 음수=파랑, 0=회색)
+const sentimentColorClass = computed(() => {
+  const score = Number(marketSentiment.value.score)
+  if (!Number.isFinite(score)) return 'sentiment-zero'
+  if (score > 0.1) return 'sentiment-positive'
+  if (score < -0.1) return 'sentiment-negative'
+  return 'sentiment-zero'
+})
+
+const formattedSentimentScore = computed(() => {
+  const score = Number(marketSentiment.value.score)
+  if (!Number.isFinite(score)) return '0.00'
+  return (score > 0 ? '+' : '') + score.toFixed(2)
+})
+
+const sentimentBadgeClass = computed(() => {
+  const label = marketSentiment.value.label
+  if (label && label.includes('긍정')) return 'badge-positive'
+  if (label && label.includes('부정')) return 'badge-negative'
+  return 'badge-neutral'
+})
+
+// 시장 감성 분포 합계 (빈 상태 판별용)
+const sentimentDistributionTotal = computed(() => {
+  const d = marketSentiment.value.distribution || {}
+  return (d.positive?.count || 0) + (d.neutral?.count || 0) + (d.negative?.count || 0)
+})
+
+// 감성 점수 게이지 위치 (-1.0 ~ +1.0 축에서 0~100% 좌표)
+const sentimentGaugePercent = computed(() => {
+  const score = Number(marketSentiment.value.score)
+  if (!Number.isFinite(score)) return 50
+  const clamped = Math.max(-1, Math.min(1, score))
+  return ((clamped + 1) / 2) * 100
+})
+
+// 감성 점수 한 줄 해석
+const sentimentInterpretation = computed(() => {
+  const score = Number(marketSentiment.value.score)
+  if (!Number.isFinite(score)) return '중립적 분위기'
+  if (score > 0.1) return '긍정적 분위기'
+  if (score < -0.1) return '부정적 분위기'
+  return '중립적 분위기'
+})
+
+// 5일 예측 전망 헬퍼 (null-safe)
+const forecastUpPercent = computed(() => {
+  const f = forecastOutlook.value
+  if (!f) return 0
+  const up = f.rising_count ?? 0
+  const dn = f.falling_count ?? 0
+  const total = up + dn
+  return total === 0 ? 0 : Math.round((up / total) * 100)
+})
+const forecastDnPercent = computed(() => 100 - forecastUpPercent.value)
+
+const uncertaintyClass = computed(() => {
+  const level = forecastOutlook.value?.uncertainty_level
+  if (level === '낮음') return 'low'
+  if (level === '높음') return 'high'
+  return 'medium'
+})
+
+// 매수 시그널 강도 (상승 vs 하락 비율 기반)
+const forecastSignalStrength = computed(() => {
+  const f = forecastOutlook.value
+  if (!f) return '—'
+  const up = f.rising_count ?? 0
+  const dn = f.falling_count ?? 0
+  if (up + dn === 0) return '—'
+  const ratio = (up / (up + dn)) * 100
+  if (ratio >= 70) return '강세'
+  if (ratio >= 55) return '우세'
+  if (ratio >= 45) return '중립'
+  if (ratio >= 30) return '약세'
+  return '매도'
+})
+
+const forecastSignalClass = computed(() => {
+  const f = forecastOutlook.value
+  if (!f) return ''
+  const up = f.rising_count ?? 0
+  const dn = f.falling_count ?? 0
+  if (up + dn === 0) return ''
+  return up > dn ? 'up' : up < dn ? 'dn' : ''
+})
+
+// 수급 매트릭스 헬퍼
+const signalLabel = computed(() => {
+  const sig = smartMoneyFlow.value?.dominant_signal
+  if (sig === 'BOTH_BUY') return '매수 우세'
+  if (sig === 'BOTH_SELL') return '매도 우세'
+  if (sig === 'MIXED') return '혼조'
+  return '—'
+})
+
+const signalBadgeClass = computed(() => {
+  const sig = smartMoneyFlow.value?.dominant_signal
+  if (sig === 'BOTH_BUY') return 'signal-buy'
+  if (sig === 'BOTH_SELL') return 'signal-sell'
+  return 'signal-neutral'
+})
+
+// 5일 평균 예측 추이 헬퍼
+const forecastChartPoints = computed(() => {
+  const t = marketForecastTrend.value
+  if (!t) return []
+  return [
+    { day: 'D+1', value: Number(t.d1_return_pct ?? 0) },
+    { day: 'D+2', value: Number(t.d2_return_pct ?? 0) },
+    { day: 'D+3', value: Number(t.d3_return_pct ?? 0) },
+    { day: 'D+4', value: Number(t.d4_return_pct ?? 0) },
+    { day: 'D+5', value: Number(t.d5_return_pct ?? 0) }
+  ]
+})
+
+const forecastChartMaxAbs = computed(() => {
+  const points = forecastChartPoints.value
+  if (points.length === 0) return 1
+  return Math.max(1, ...points.map(p => Math.abs(p.value)))
+})
+
+const trendDirectionClass = computed(() => {
+  const dir = marketForecastTrend.value?.trend_direction
+  if (dir === '상승세') return 'up'
+  if (dir === '하락세') return 'dn'
+  return 'neutral'
+})
+
+// 값이 이미 % 단위 (예: 2.34 = +2.34%)
+const formatTrend = (value) => {
+  if (value === null || value === undefined) return '—'
+  const num = Number(value)
+  if (!Number.isFinite(num)) return '—'
+  return `${num > 0 ? '+' : ''}${num.toFixed(2)}%`
+}
+
+const formatPercent = (value) => {
+  if (value === null || value === undefined) return '—'
+  const num = Number(value)
+  if (!Number.isFinite(num)) return '—'
+  return `${num > 0 ? '+' : ''}${num.toFixed(2)}%`
+}
+
+const getTrendClass = (value) => {
+  if (value === null || value === undefined) return ''
+  const num = Number(value)
+  if (!Number.isFinite(num) || num === 0) return ''
+  return num > 0 ? 'up' : 'dn'
+}
+
+// 펀더멘탈 분석 헬퍼
+const formatFinancial = (value) => {
+  if (value === null || value === undefined) return '—'
+  const num = Number(value)
+  if (!Number.isFinite(num)) return '—'
+  return num.toFixed(1)
 }
 
 // 표시용 인사이트 (백엔드 summary 우선, fallback은 클라이언트 계산)
@@ -463,9 +666,9 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- ① 30종목 피처 히트맵 -->
+      <!-- ① 피처 히트맵 -->
       <div class="analysis-section">
-        <div class="section-label">30종목 피처 히트맵</div>
+        <div class="section-label">피처 히트맵</div>
         <div class="section-card">
           <div v-if="!hasHeatmapData" class="empty-block">
             분석 데이터가 없습니다
@@ -475,7 +678,7 @@ onMounted(() => {
             <!-- 실제 히트맵 매트릭스 (Top 10 × 5 피처) -->
             <div class="heatmap-section">
               <div class="heatmap-header-bar">
-                <span class="heatmap-title">상위 10종목 × 5개 피처</span>
+                <span class="heatmap-title">상위 {{ shownHeatmapCount }}종목 × 5개 피처</span>
                 <span class="heatmap-legend">
                   <span class="legend-chip up"></span> 양호
                   <span class="legend-chip dn"></span> 부진
@@ -508,6 +711,14 @@ onMounted(() => {
                   </div>
                 </template>
               </div>
+
+              <button
+                v-if="heatmapData.length > 10"
+                class="heatmap-toggle-btn"
+                @click="toggleHeatmap"
+              >
+                {{ showAllHeatmap ? '접기' : `전체 ${heatmapData.length}종목 보기` }}
+              </button>
             </div>
           </template>
 
@@ -529,6 +740,11 @@ onMounted(() => {
               <div class="stat-label">중립</div>
               <div class="stat-value neutral">{{ heatmapStats.neutral }}</div>
             </div>
+          </div>
+
+          <!-- 통계 범례 -->
+          <div class="stats-caption">
+            매수·매도 후보 = AI가 선정한 TOP3 · 중립 = 미선정 종목
           </div>
 
           <!-- 인사이트 (백엔드 summary 또는 클라이언트 계산) -->
@@ -555,7 +771,10 @@ onMounted(() => {
               v-if="displayInsights.positiveSentimentCount !== null"
               class="insight-row"
             >
-              <span class="insight-label">긍정/부정 감성 종목</span>
+              <span class="insight-label">
+                긍정/부정 감성 종목
+                <span class="insight-sub">감성점수 &gt; 0 / &lt; 0 종목 수</span>
+              </span>
               <span class="insight-value">
                 <span class="up">{{ displayInsights.positiveSentimentCount }}</span>
                 /
@@ -570,12 +789,15 @@ onMounted(() => {
               <span class="insight-value up">{{ displayInsights.positiveTrendCount }}개</span>
             </div>
             <div class="insight-row highlight">
-              <span class="insight-label">최고 점수 종목</span>
+              <span class="insight-label">
+                최고 점수 종목
+                <span
+                  v-if="displayInsights.topStock.score"
+                  class="insight-sub"
+                >5개 핵심 피처 중 {{ displayInsights.topStock.score }}개 양호</span>
+              </span>
               <span class="insight-value highlight">
                 {{ displayInsights.topStock.name || '분석중' }}
-                <span v-if="displayInsights.topStock.score" class="highlight-score">
-                  ({{ displayInsights.topStock.score }}/5)
-                </span>
               </span>
             </div>
           </div>
@@ -652,7 +874,264 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- ③ 시장 전반 감성분석 -->
+      <!-- ③ 수급 매트릭스 (스마트머니 4분면) -->
+      <div class="analysis-section">
+        <div class="section-label">수급 매트릭스</div>
+        <div class="section-card">
+          <div class="smart-money-block">
+            <!-- 설명 -->
+            <div class="smart-money-intro">
+              스마트머니 컨센서스는 외국인·기관이 같은 방향으로 매매하는 비율(의견 일치도)을 나타냅니다.
+            </div>
+
+            <!-- 컨센서스 헤더 -->
+            <div class="consensus-header">
+              <div>
+                <div class="consensus-label">스마트머니 컨센서스</div>
+                <div class="consensus-value">
+                  {{ smartMoneyFlow?.consensus_pct ?? '—' }}<span v-if="smartMoneyFlow?.consensus_pct !== null && smartMoneyFlow?.consensus_pct !== undefined">%</span>
+                </div>
+              </div>
+              <div :class="['signal-badge', signalBadgeClass]">
+                {{ signalLabel }}
+              </div>
+            </div>
+
+            <div class="sentiment-divider"></div>
+
+            <!-- 4분면 설명 -->
+            <div class="quadrant-caption">
+              동반 매수/매도 = 외인·기관 둘 다 같은 방향 · 디커플링 = 한쪽만 매수
+            </div>
+
+            <!-- 4분면 그리드 -->
+            <div class="quadrant-grid">
+              <!-- 좌상: 디커플링 A (기관만 매수) -->
+              <div class="quadrant-cell decoupling">
+                <div class="quadrant-axis">외국인 매도</div>
+                <div class="quadrant-name">디커플링 A</div>
+                <div class="quadrant-count">{{ smartMoneyFlow?.institutional_only_buy_count ?? '—' }}</div>
+                <div class="quadrant-sub">기관 매수</div>
+              </div>
+              <!-- 우상: 동반 매수 (Q1) -->
+              <div class="quadrant-cell both-buy">
+                <div class="quadrant-axis"></div>
+                <div class="quadrant-name">★ 동반 매수</div>
+                <div class="quadrant-count up">{{ smartMoneyFlow?.both_buy_count ?? '—' }}</div>
+                <div class="quadrant-sub">외인+기관</div>
+              </div>
+              <!-- 좌하: 동반 매도 (Q3) -->
+              <div class="quadrant-cell both-sell">
+                <div class="quadrant-axis"></div>
+                <div class="quadrant-name">▼ 동반 매도</div>
+                <div class="quadrant-count dn">{{ smartMoneyFlow?.both_sell_count ?? '—' }}</div>
+                <div class="quadrant-sub">외인-기관</div>
+              </div>
+              <!-- 우하: 디커플링 B (외국인만 매수) -->
+              <div class="quadrant-cell decoupling">
+                <div class="quadrant-axis">외국인 매수</div>
+                <div class="quadrant-name">디커플링 B</div>
+                <div class="quadrant-count">{{ smartMoneyFlow?.foreign_only_buy_count ?? '—' }}</div>
+                <div class="quadrant-sub">기관 매도</div>
+              </div>
+            </div>
+
+            <div class="sentiment-divider"></div>
+
+            <!-- 스마트머니 TOP 종목 -->
+            <div class="smart-money-top">
+              <span class="smart-money-top-label">💎 스마트머니 TOP</span>
+              <span class="smart-money-top-name">
+                {{ smartMoneyFlow?.smart_money_top_stock?.stock_name || '—' }}
+              </span>
+              <span class="smart-money-top-value up">
+                {{ smartMoneyFlow?.smart_money_top_stock ? '+' + formatNumber(smartMoneyFlow.smart_money_top_stock.combined_net_buy) + '원' : '—' }}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ④ 5일 예측 전망 (Prophet) -->
+      <div class="analysis-section">
+        <div class="section-label">5일 예측 전망</div>
+        <div class="section-card">
+          <div class="forecast-block">
+            <!-- 상단: 상승/하락 분포 -->
+            <div class="forecast-distribution">
+              <div class="forecast-stat up">
+                <div class="forecast-stat-label">상승 예측</div>
+                <div class="forecast-stat-value">{{ forecastOutlook?.rising_count ?? 0 }}<span class="unit">종목</span></div>
+              </div>
+              <div class="forecast-divider"></div>
+              <div class="forecast-stat dn">
+                <div class="forecast-stat-label">하락 예측</div>
+                <div class="forecast-stat-value">{{ forecastOutlook?.falling_count ?? 0 }}<span class="unit">종목</span></div>
+              </div>
+            </div>
+
+            <!-- 분포 바 -->
+            <div class="forecast-bar">
+              <div class="forecast-bar-up" :style="{ width: forecastUpPercent + '%' }"></div>
+              <div class="forecast-bar-dn" :style="{ width: forecastDnPercent + '%' }"></div>
+            </div>
+
+            <div class="sentiment-divider"></div>
+
+            <!-- 지표 그리드 -->
+            <div class="forecast-metrics">
+              <div class="metric-item">
+                <div class="metric-label">5일 예상 수익률</div>
+                <div :class="['metric-value', getTrendClass(forecastOutlook?.avg_expected_return_5d)]">
+                  {{ formatTrend(forecastOutlook?.avg_expected_return_5d) }}
+                </div>
+              </div>
+              <div class="metric-item">
+                <div class="metric-label">매수 시그널</div>
+                <div :class="['metric-value', forecastSignalClass]">
+                  {{ forecastSignalStrength }}
+                </div>
+              </div>
+              <div class="metric-item">
+                <div class="metric-label">예측 변동성</div>
+                <div :class="['metric-value uncertainty', uncertaintyClass]">
+                  {{ forecastOutlook?.uncertainty_level || '—' }}
+                  <span
+                    v-if="forecastOutlook?.avg_uncertainty_pct !== null && forecastOutlook?.avg_uncertainty_pct !== undefined"
+                    class="metric-sub"
+                  >
+                    ({{ formatPercent(forecastOutlook.avg_uncertainty_pct) }})
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 최고 전망 종목 -->
+            <div class="forecast-top">
+              <span class="forecast-top-label">📈 최고 상승 전망</span>
+              <span class="forecast-top-name">{{ forecastOutlook?.top_outlook_stock?.stock_name || '—' }}</span>
+              <span class="forecast-top-value up">
+                {{ forecastOutlook?.top_outlook_stock ? formatTrend(forecastOutlook.top_outlook_stock.expected_return_5d) : '—' }}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ⑤ D+1~D+5 시장 평균 예측 추이 -->
+      <div class="analysis-section">
+        <div class="section-label">5일 시장 평균 예측 추이</div>
+        <div class="section-card">
+          <div class="trend-block">
+            <!-- 헤더: D+5 예상 수익률 + 추세 방향 -->
+            <div class="trend-header">
+              <div>
+                <div class="trend-label">D+5 시장 평균 예상 수익률</div>
+                <div :class="['trend-value', trendDirectionClass]">
+                  {{ formatTrend(marketForecastTrend?.d5_return_pct) }}
+                </div>
+              </div>
+              <div :class="['trend-badge', trendDirectionClass]">
+                {{ marketForecastTrend?.trend_direction || '—' }}
+              </div>
+            </div>
+
+            <!-- 신뢰구간 -->
+            <div
+              v-if="marketForecastTrend?.d5_upper_pct !== null && marketForecastTrend?.d5_upper_pct !== undefined"
+              class="confidence-band"
+            >
+              <span class="confidence-label">95% 신뢰구간 (D+5)</span>
+              <span class="confidence-range">
+                {{ formatTrend(marketForecastTrend.d5_lower_pct) }}
+                <span class="range-sep">~</span>
+                {{ formatTrend(marketForecastTrend.d5_upper_pct) }}
+              </span>
+            </div>
+
+            <div class="sentiment-divider"></div>
+
+            <!-- Mini bar chart (5일 막대) -->
+            <div class="trend-chart">
+              <div
+                v-for="point in forecastChartPoints"
+                :key="point.day"
+                class="trend-bar-col"
+              >
+                <div class="trend-bar-wrap">
+                  <div
+                    :class="['trend-bar', point.value >= 0 ? 'up' : 'dn']"
+                    :style="{ height: Math.min(100, Math.abs(point.value) / forecastChartMaxAbs * 100) + '%' }"
+                  ></div>
+                </div>
+                <div :class="['trend-bar-value', point.value > 0 ? 'up' : point.value < 0 ? 'dn' : '']">
+                  {{ point.value > 0 ? '+' : '' }}{{ point.value.toFixed(2) }}%
+                </div>
+                <div class="trend-bar-label">{{ point.day }}</div>
+              </div>
+            </div>
+
+            <!-- 데이터 커버리지 -->
+            <div class="trend-coverage">
+              <span class="coverage-label">분석 종목 수</span>
+              <span class="coverage-count">
+                {{ marketForecastTrend?.data_count ?? '—' }}<span v-if="marketForecastTrend?.data_count" class="unit">/30종목</span>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ⑥ 펀더멘탈 분석 (DART) -->
+      <div class="analysis-section">
+        <div class="section-label">펀더멘탈 분석</div>
+        <div class="section-card">
+          <div class="financial-block">
+            <!-- 평균 지표 3개 -->
+            <div class="financial-avg-grid">
+              <div class="financial-avg-box">
+                <div class="financial-avg-label">평균 PER</div>
+                <div class="financial-avg-value">{{ formatFinancial(financialHealth?.avg_per) }}</div>
+                <div class="financial-avg-sub">{{ financialHealth?.undervalued_count ?? 0 }}종목 저평가</div>
+              </div>
+              <div class="financial-avg-box">
+                <div class="financial-avg-label">평균 ROE</div>
+                <div class="financial-avg-value">{{ formatFinancial(financialHealth?.avg_roe) }}<span class="unit">%</span></div>
+                <div class="financial-avg-sub">{{ financialHealth?.high_roe_count ?? 0 }}종목 우수</div>
+              </div>
+              <div class="financial-avg-box">
+                <div class="financial-avg-label">평균 영업이익률</div>
+                <div class="financial-avg-value">{{ formatFinancial(financialHealth?.avg_operating_margin) }}<span class="unit">%</span></div>
+                <div class="financial-avg-sub">{{ financialHealth?.high_margin_count ?? 0 }}종목 우수</div>
+              </div>
+            </div>
+
+            <div class="sentiment-divider"></div>
+
+            <!-- 우수 종목 강조 -->
+            <div class="excellent-row">
+              <div class="excellent-info">
+                <div class="excellent-label">💎 펀더멘탈 우수 종목</div>
+                <div class="excellent-sub">PER &lt; 15 · ROE &gt; 15% · 영업이익률 &gt; 10%</div>
+              </div>
+              <div class="excellent-count">
+                {{ financialHealth?.excellent_count ?? 0 }}<span class="unit">종목</span>
+              </div>
+            </div>
+
+            <!-- 데이터 커버리지 -->
+            <div class="data-coverage">
+              <span class="coverage-label">DART 데이터 커버리지</span>
+              <div class="coverage-bar">
+                <div class="coverage-fill" :style="{ width: (financialHealth?.data_coverage ?? 0) + '%' }"></div>
+              </div>
+              <span class="coverage-percent">{{ financialHealth?.data_coverage ?? 0 }}%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ⑤ 시장 전반 감성분석 -->
       <div class="analysis-section">
         <div class="section-label">시장 전반 감성분석</div>
         <div class="section-card">
@@ -662,11 +1141,33 @@ onMounted(() => {
               <div>
                 <div class="sentiment-source">KR-FinBERT · RSS 피드 기반</div>
                 <div class="sentiment-main">
-                  <span class="sentiment-value">{{ marketSentiment.score > 0 ? '+' : '' }}{{ marketSentiment.score }}</span>
+                  <span class="sentiment-value" :class="sentimentColorClass">{{ formattedSentimentScore }}</span>
                   <span class="sentiment-label">시장 감성점수</span>
                 </div>
               </div>
-              <div class="sentiment-badge">{{ marketSentiment.label }}</div>
+              <div class="sentiment-badge" :class="sentimentBadgeClass">{{ marketSentiment.label }}</div>
+            </div>
+
+            <div class="sentiment-divider"></div>
+
+            <!-- 감성 점수 게이지 (-1.0 ~ +1.0) + 해석 -->
+            <div class="sentiment-gauge-section">
+              <div class="sentiment-gauge-track">
+                <div class="gauge-zero-line"></div>
+                <div
+                  class="gauge-marker"
+                  :class="sentimentColorClass"
+                  :style="{ left: sentimentGaugePercent + '%' }"
+                ></div>
+              </div>
+              <div class="sentiment-gauge-scale">
+                <span>-1.0</span>
+                <span>0</span>
+                <span>+1.0</span>
+              </div>
+              <div class="sentiment-interpretation" :class="sentimentColorClass">
+                {{ sentimentInterpretation }}
+              </div>
             </div>
 
             <div class="sentiment-divider"></div>
@@ -676,31 +1177,38 @@ onMounted(() => {
               <div class="distribution-header">
                 <span>종목 감성 분포 (30종목)</span>
               </div>
-              <div class="distribution-bar">
-                <div
-                  class="bar-segment positive"
-                  :style="{ width: marketSentiment.distribution.positive.percent + '%' }"
-                ></div>
-                <div
-                  class="bar-segment neutral"
-                  :style="{ width: marketSentiment.distribution.neutral.percent + '%' }"
-                ></div>
-                <div
-                  class="bar-segment negative"
-                  :style="{ width: marketSentiment.distribution.negative.percent + '%' }"
-                ></div>
+
+              <div v-if="sentimentDistributionTotal === 0" class="distribution-empty">
+                분포 데이터 없음
               </div>
-              <div class="distribution-labels">
-                <span class="label-positive">
-                  긍정 {{ marketSentiment.distribution.positive.count }}개 ({{ marketSentiment.distribution.positive.percent }}%)
-                </span>
-                <span class="label-neutral">
-                  중립 {{ marketSentiment.distribution.neutral.count }}개 ({{ marketSentiment.distribution.neutral.percent }}%)
-                </span>
-                <span class="label-negative">
-                  부정 {{ marketSentiment.distribution.negative.count }}개 ({{ marketSentiment.distribution.negative.percent }}%)
-                </span>
-              </div>
+
+              <template v-else>
+                <div class="distribution-bar">
+                  <div
+                    class="bar-segment positive"
+                    :style="{ width: marketSentiment.distribution.positive.percent + '%' }"
+                  ></div>
+                  <div
+                    class="bar-segment neutral"
+                    :style="{ width: marketSentiment.distribution.neutral.percent + '%' }"
+                  ></div>
+                  <div
+                    class="bar-segment negative"
+                    :style="{ width: marketSentiment.distribution.negative.percent + '%' }"
+                  ></div>
+                </div>
+                <div class="distribution-labels">
+                  <span class="label-positive">
+                    긍정 {{ marketSentiment.distribution.positive.count }}개 ({{ marketSentiment.distribution.positive.percent }}%)
+                  </span>
+                  <span class="label-neutral">
+                    중립 {{ marketSentiment.distribution.neutral.count }}개 ({{ marketSentiment.distribution.neutral.percent }}%)
+                  </span>
+                  <span class="label-negative">
+                    부정 {{ marketSentiment.distribution.negative.count }}개 ({{ marketSentiment.distribution.negative.percent }}%)
+                  </span>
+                </div>
+              </template>
             </div>
 
             <div class="sentiment-divider"></div>
@@ -989,6 +1497,25 @@ onMounted(() => {
   align-items: center;
 }
 
+.heatmap-toggle-btn {
+  width: 100%;
+  margin-top: var(--spacing-sm);
+  padding: 7px;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font-size: 10.5px;
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.heatmap-toggle-btn:hover {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+}
+
 /* Stats Grid */
 .stats-grid {
   display: grid;
@@ -1023,6 +1550,13 @@ onMounted(() => {
 .stat-value.nt { color: #2dd4bf; }
 .stat-value.neutral { color: var(--color-text-secondary); }
 
+.stats-caption {
+  padding: 0 var(--spacing-md) var(--spacing-sm);
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  line-height: 1.4;
+}
+
 /* Insights Section */
 .insights-section {
   padding: var(--spacing-md);
@@ -1055,6 +1589,15 @@ onMounted(() => {
   font-size: 10.5px;
   color: var(--color-text-secondary);
   font-weight: var(--font-weight-medium);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.insight-sub {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  font-weight: var(--font-weight-normal);
 }
 
 .insight-value {
@@ -1132,9 +1675,9 @@ onMounted(() => {
 
 .stock-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--spacing-sm);
-  padding: 9px 0;
+  padding: 12px 0;
   border-bottom: 1px solid var(--color-border);
   transition: opacity 0.2s;
 }
@@ -1195,13 +1738,17 @@ onMounted(() => {
 }
 
 .stock-reason {
-  font-size: 10px;
-  color: var(--color-text-secondary);
-  margin-top: 2px;
-  line-height: 1.35;
-  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--color-text-primary);
+  margin-top: 3px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .stock-score {
@@ -1209,6 +1756,7 @@ onMounted(() => {
   font-weight: var(--font-weight-bold);
   flex-shrink: 0;
   font-family: 'DM Mono', monospace;
+  padding-top: 1px;
 }
 
 .stock-score.up { color: #f87171; }
@@ -1247,8 +1795,11 @@ onMounted(() => {
   font-size: 28px;
   font-weight: var(--font-weight-bold);
   font-family: 'DM Mono', monospace;
-  color: #f87171;
 }
+
+.sentiment-value.sentiment-positive { color: #f87171; }
+.sentiment-value.sentiment-negative { color: #60a5fa; }
+.sentiment-value.sentiment-zero { color: var(--color-text-secondary); }
 
 .sentiment-label {
   font-size: 11px;
@@ -1257,11 +1808,26 @@ onMounted(() => {
 
 .sentiment-badge {
   font-size: 10px;
-  background: rgba(52, 211, 153, 0.1);
-  color: var(--color-stock-up);
-  border: 1px solid rgba(52, 211, 153, 0.2);
   padding: 3px 10px;
   border-radius: 20px;
+}
+
+.sentiment-badge.badge-positive {
+  background: rgba(248, 113, 113, 0.1);
+  color: #f87171;
+  border: 1px solid rgba(248, 113, 113, 0.2);
+}
+
+.sentiment-badge.badge-negative {
+  background: rgba(96, 165, 250, 0.1);
+  color: #60a5fa;
+  border: 1px solid rgba(96, 165, 250, 0.2);
+}
+
+.sentiment-badge.badge-neutral {
+  background: rgba(74, 85, 104, 0.15);
+  color: var(--color-text-secondary);
+  border: 1px solid rgba(74, 85, 104, 0.3);
 }
 
 .sentiment-divider {
@@ -1270,11 +1836,79 @@ onMounted(() => {
   margin: 2px 0;
 }
 
+/* Sentiment Gauge (-1.0 ~ +1.0) */
+.sentiment-gauge-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sentiment-gauge-track {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #60a5fa 0%, #4a5568 50%, #f87171 100%);
+}
+
+.gauge-zero-line {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  left: 50%;
+  width: 1px;
+  background: var(--color-text-tertiary);
+  opacity: 0.6;
+}
+
+.gauge-marker {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--color-bg-secondary);
+  transform: translate(-50%, -50%);
+  transition: left 0.3s ease;
+  background: var(--color-text-secondary);
+}
+
+.gauge-marker.sentiment-positive { background: #f87171; }
+.gauge-marker.sentiment-negative { background: #60a5fa; }
+.gauge-marker.sentiment-zero { background: var(--color-text-secondary); }
+
+.sentiment-gauge-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 8.5px;
+  color: var(--color-text-tertiary);
+  font-family: 'DM Mono', monospace;
+}
+
+.sentiment-interpretation {
+  font-size: 11px;
+  font-weight: var(--font-weight-semibold);
+  text-align: center;
+  margin-top: 2px;
+}
+
+.sentiment-interpretation.sentiment-positive { color: #f87171; }
+.sentiment-interpretation.sentiment-negative { color: #60a5fa; }
+.sentiment-interpretation.sentiment-zero { color: var(--color-text-secondary); }
+
 /* Distribution */
 .distribution-section {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.distribution-empty {
+  padding: 12px;
+  text-align: center;
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  background: var(--color-bg-tertiary);
+  border-radius: var(--radius-md);
 }
 
 .distribution-header {
@@ -1348,7 +1982,551 @@ onMounted(() => {
   color: var(--color-text-secondary);
 }
 
+/* Forecast Block (5일 예측 전망) */
+.forecast-block {
+  padding: var(--spacing-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.forecast-distribution {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+.forecast-stat {
+  flex: 1;
+  text-align: center;
+}
+
+.forecast-stat-label {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  margin-bottom: 4px;
+}
+
+.forecast-stat-value {
+  font-size: 22px;
+  font-weight: var(--font-weight-bold);
+  font-family: 'DM Mono', monospace;
+}
+
+.forecast-stat-value .unit {
+  font-size: 11px;
+  margin-left: 3px;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+
+.forecast-stat.up .forecast-stat-value { color: #f87171; }
+.forecast-stat.dn .forecast-stat-value { color: #60a5fa; }
+
+.forecast-divider {
+  width: 1px;
+  height: 36px;
+  background: var(--color-border);
+}
+
+.forecast-bar {
+  height: 6px;
+  background: var(--color-bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+  display: flex;
+}
+
+.forecast-bar-up { height: 100%; background: #f87171; }
+.forecast-bar-dn { height: 100%; background: #60a5fa; }
+
+.forecast-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.metric-item {
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 8px;
+  text-align: center;
+}
+
+.metric-label {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  margin-bottom: 4px;
+}
+
+.metric-value {
+  font-size: 12px;
+  font-weight: var(--font-weight-semibold);
+  font-family: 'DM Mono', monospace;
+  color: var(--color-text-primary);
+}
+
+.metric-value.up { color: #f87171; }
+.metric-value.dn { color: #60a5fa; }
+.metric-value.uncertainty.low { color: #34d399; }
+.metric-value.uncertainty.medium { color: #fbbf24; }
+.metric-value.uncertainty.high { color: #f87171; }
+
+.metric-sub {
+  font-size: 8.5px;
+  color: var(--color-text-tertiary);
+  font-weight: var(--font-weight-medium);
+  margin-left: 2px;
+  display: block;
+}
+
+.forecast-top {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 8px 12px;
+  background: rgba(167, 139, 250, 0.08);
+  border-radius: var(--radius-md);
+}
+
+.forecast-top-label {
+  font-size: 10.5px;
+  color: var(--color-text-secondary);
+  font-weight: var(--font-weight-medium);
+  flex: 1;
+}
+
+.forecast-top-name {
+  font-size: 12px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.forecast-top-value {
+  font-size: 12px;
+  font-weight: var(--font-weight-bold);
+  font-family: 'DM Mono', monospace;
+}
+
+.forecast-top-value.up { color: #f87171; }
+
+/* Financial Block (펀더멘탈 분석) */
+.financial-block {
+  padding: var(--spacing-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.financial-avg-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.financial-avg-box {
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 10px 6px;
+  text-align: center;
+}
+
+.financial-avg-label {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  margin-bottom: 4px;
+  letter-spacing: 0.3px;
+}
+
+.financial-avg-value {
+  font-size: 18px;
+  font-weight: var(--font-weight-bold);
+  font-family: 'DM Mono', monospace;
+  color: var(--color-text-primary);
+}
+
+.financial-avg-value .unit {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  margin-left: 1px;
+}
+
+.financial-avg-sub {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  margin-top: 4px;
+}
+
+.excellent-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: linear-gradient(90deg, rgba(167, 139, 250, 0.08) 0%, rgba(167, 139, 250, 0.04) 100%);
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(167, 139, 250, 0.15);
+}
+
+.excellent-label {
+  font-size: 11px;
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.excellent-sub {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  margin-top: 2px;
+}
+
+.excellent-count {
+  font-size: 22px;
+  font-weight: var(--font-weight-bold);
+  font-family: 'DM Mono', monospace;
+  color: var(--color-primary);
+}
+
+.excellent-count .unit {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+  margin-left: 3px;
+}
+
+.data-coverage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.coverage-label {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  flex-shrink: 0;
+}
+
+.coverage-bar {
+  flex: 1;
+  height: 4px;
+  background: var(--color-bg-tertiary);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.coverage-fill {
+  height: 100%;
+  background: var(--color-stock-up);
+  transition: width 0.3s;
+}
+
+.coverage-percent {
+  font-size: 10px;
+  font-family: 'DM Mono', monospace;
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+}
+
 .bottom-spacer {
   height: var(--bottom-nav-height);
+}
+
+/* Smart Money Block (수급 매트릭스 / 스마트머니 4분면) */
+.smart-money-block {
+  padding: var(--spacing-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.smart-money-intro {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  padding: 8px 10px;
+  background: var(--color-bg-tertiary);
+  border-radius: var(--radius-md);
+}
+
+.quadrant-caption {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  line-height: 1.4;
+  text-align: center;
+}
+
+.consensus-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.consensus-label {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.consensus-value {
+  font-size: 28px;
+  font-weight: var(--font-weight-bold);
+  font-family: 'DM Mono', monospace;
+  color: var(--color-text-primary);
+  line-height: 1;
+}
+
+.signal-badge {
+  font-size: 10px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-weight: var(--font-weight-semibold);
+}
+
+.signal-badge.signal-buy {
+  background: rgba(248, 113, 113, 0.1);
+  color: #f87171;
+  border: 1px solid rgba(248, 113, 113, 0.2);
+}
+
+.signal-badge.signal-sell {
+  background: rgba(96, 165, 250, 0.1);
+  color: #60a5fa;
+  border: 1px solid rgba(96, 165, 250, 0.2);
+}
+
+.signal-badge.signal-neutral {
+  background: rgba(74, 85, 104, 0.15);
+  color: var(--color-text-secondary);
+  border: 1px solid rgba(74, 85, 104, 0.3);
+}
+
+.quadrant-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  position: relative;
+}
+
+.quadrant-cell {
+  padding: 12px 10px;
+  border-radius: var(--radius-md);
+  text-align: center;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-tertiary);
+}
+
+.quadrant-cell.both-buy {
+  background: rgba(248, 113, 113, 0.08);
+  border-color: rgba(248, 113, 113, 0.2);
+}
+
+.quadrant-cell.both-sell {
+  background: rgba(96, 165, 250, 0.08);
+  border-color: rgba(96, 165, 250, 0.2);
+}
+
+.quadrant-cell.decoupling {
+  background: rgba(251, 191, 36, 0.05);
+  border-color: rgba(251, 191, 36, 0.15);
+}
+
+.quadrant-name {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+  font-weight: var(--font-weight-semibold);
+  margin-bottom: 6px;
+}
+
+.quadrant-count {
+  font-size: 20px;
+  font-weight: var(--font-weight-bold);
+  font-family: 'DM Mono', monospace;
+  color: var(--color-text-primary);
+  line-height: 1;
+}
+
+.quadrant-count.up { color: #f87171; }
+.quadrant-count.dn { color: #60a5fa; }
+
+.quadrant-sub {
+  font-size: 8.5px;
+  color: var(--color-text-tertiary);
+  margin-top: 4px;
+}
+
+.quadrant-axis {
+  display: none;
+}
+
+.smart-money-top {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 8px 12px;
+  background: rgba(167, 139, 250, 0.08);
+  border-radius: var(--radius-md);
+}
+
+.smart-money-top-label {
+  font-size: 10.5px;
+  color: var(--color-text-secondary);
+  font-weight: var(--font-weight-medium);
+  flex: 1;
+}
+
+.smart-money-top-name {
+  font-size: 12px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.smart-money-top-value {
+  font-size: 11.5px;
+  font-weight: var(--font-weight-bold);
+  font-family: 'DM Mono', monospace;
+}
+
+.smart-money-top-value.up { color: #f87171; }
+
+/* Trend Block (5일 시장 평균 예측 추이) */
+.trend-block {
+  padding: var(--spacing-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.trend-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.trend-label {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  margin-bottom: 4px;
+  letter-spacing: 0.5px;
+}
+
+.trend-value {
+  font-size: 26px;
+  font-weight: var(--font-weight-bold);
+  font-family: 'DM Mono', monospace;
+  line-height: 1.1;
+}
+
+.trend-value.up { color: #f87171; }
+.trend-value.dn { color: #60a5fa; }
+.trend-value.neutral { color: var(--color-text-secondary); }
+
+.trend-badge {
+  font-size: 10px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-weight: var(--font-weight-semibold);
+}
+
+.trend-badge.up { background: rgba(248, 113, 113, 0.1); color: #f87171; border: 1px solid rgba(248, 113, 113, 0.2); }
+.trend-badge.dn { background: rgba(96, 165, 250, 0.1); color: #60a5fa; border: 1px solid rgba(96, 165, 250, 0.2); }
+.trend-badge.neutral { background: rgba(74, 85, 104, 0.15); color: var(--color-text-secondary); border: 1px solid rgba(74, 85, 104, 0.3); }
+
+.confidence-band {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: var(--color-bg-tertiary);
+  border-radius: var(--radius-md);
+  font-size: 10px;
+}
+
+.confidence-band .confidence-label {
+  color: var(--color-text-tertiary);
+}
+
+.confidence-range {
+  font-family: 'DM Mono', monospace;
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.range-sep {
+  color: var(--color-text-tertiary);
+  margin: 0 4px;
+}
+
+.trend-chart {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+  height: 120px;
+  align-items: end;
+}
+
+.trend-bar-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.trend-bar-wrap {
+  width: 100%;
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  min-height: 50px;
+}
+
+.trend-bar {
+  width: 70%;
+  min-height: 4px;
+  border-radius: 3px 3px 0 0;
+  transition: height 0.3s ease;
+}
+
+.trend-bar.up { background: linear-gradient(180deg, #f87171, rgba(248, 113, 113, 0.5)); }
+.trend-bar.dn { background: linear-gradient(180deg, rgba(96, 165, 250, 0.5), #60a5fa); }
+
+.trend-bar-value {
+  font-size: 9px;
+  font-weight: var(--font-weight-semibold);
+  font-family: 'DM Mono', monospace;
+  color: var(--color-text-primary);
+}
+
+.trend-bar-value.up { color: #f87171; }
+.trend-bar-value.dn { color: #60a5fa; }
+
+.trend-bar-label {
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  font-family: 'DM Mono', monospace;
+}
+
+.trend-coverage {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  font-size: 10px;
+}
+
+.trend-coverage .coverage-label {
+  color: var(--color-text-tertiary);
+}
+
+.trend-coverage .coverage-count {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+  font-family: 'DM Mono', monospace;
+}
+
+.trend-coverage .unit {
+  color: var(--color-text-tertiary);
+  font-weight: var(--font-weight-medium);
 }
 </style>
