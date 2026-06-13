@@ -310,6 +310,54 @@ class DatabaseRepository:
         finally:
             session.close()
 
+    def update_market_sentiment(
+        self,
+        summary_date: date,
+        market_sentiment_score: float
+    ) -> bool:
+        """
+        Update market_sentiment_score on an existing market_daily_summary row.
+
+        Stage 1 에서 insert 된 해당 날짜의 행을 찾아 Track 1(시장 전반) 감성
+        점수만 갱신한다. 스키마는 변경하지 않으며, 행이 없으면 경고만 남기고
+        실패(False)를 반환한다 (파이프라인을 중단시키지 않음).
+
+        Args:
+            summary_date: market_daily_summary 대상 날짜 (Stage 1 trade_date 와 동일)
+            market_sentiment_score: Track 1 시장 감성점수 (-1.0 ~ 1.0)
+
+        Returns:
+            True if a row was updated, False otherwise
+        """
+        session = self.session_factory()
+        try:
+            record = session.query(MarketDailySummary).filter(
+                MarketDailySummary.summary_date == summary_date
+            ).first()
+
+            if record is None:
+                logger.warning(
+                    f"No market_daily_summary row for {summary_date}; "
+                    f"cannot update market_sentiment_score"
+                )
+                return False
+
+            record.market_sentiment_score = market_sentiment_score
+            session.commit()
+            logger.info(
+                f"Updated market_sentiment_score={market_sentiment_score:.4f} "
+                f"for {summary_date}"
+            )
+            return True
+
+        except SQLAlchemyError as e:
+            logger.error(f"Database error while updating market sentiment: {e}")
+            session.rollback()
+            return False
+
+        finally:
+            session.close()
+
     # Deprecated: kept for backward compatibility
     def save_kospi_index(self, kospi_data: Dict[str, float], trade_date: date) -> bool:
         """Deprecated: Use save_market_summary instead."""
@@ -510,37 +558,151 @@ class DatabaseRepository:
         Returns:
             True if successful, False otherwise
         """
-        try:
-            import pandas as pd
-            import json
+        import json
+        import math
+        import numpy as np
 
-            records = []
-            for result in filter_results:
-                records.append({
-                    'stock_code': result['stock_code'],
-                    'stock_name': result.get('stock_name', ''),
-                    'filter_date': filter_date,
-                    'passed': result['passed'],
-                    'failure_reason': result.get('failure_reason'),
-                    'max_quantity': result.get('max_quantity'),
-                    'current_price': result.get('current_price'),
-                    'filter_checks': json.dumps(result.get('filter_checks', {}))
-                })
+        def _sanitize(value):
+            """
+            Recursively sanitize a value for JSON/JSONB serialization.
 
-            if records:
-                df = pd.DataFrame(records)
-                # Use engine if conn not provided
-                db_conn = conn if conn is not None else self.engine
-                df.to_sql('safety_filter_result', db_conn, if_exists='append', index=False)
-                logger.info(f"Saved {len(records)} safety filter results")
-                return True
-            else:
-                logger.warning("No safety filter results to save")
-                return False
+            Converts numpy scalar types to native Python types and maps any
+            non-finite float (NaN, +Inf, -Inf) to None so PostgreSQL's JSON/JSONB
+            type accepts the result (it rejects the NaN/Infinity literal tokens
+            that json.dumps emits by default).
 
-        except Exception as e:
-            logger.error(f"Error saving safety filter results: {e}")
+            Args:
+                value: Arbitrary value (dict, list, numpy/native scalar, None)
+
+            Returns:
+                A JSON-safe value composed of native Python types only.
+            """
+            # 중첩 dict 재귀 처리
+            if isinstance(value, dict):
+                return {k: _sanitize(v) for k, v in value.items()}
+            # 중첩 list/tuple 재귀 처리
+            if isinstance(value, (list, tuple)):
+                return [_sanitize(v) for v in value]
+            # np.bool_ → bool (bool 체크를 int보다 먼저 수행)
+            if isinstance(value, (bool, np.bool_)):
+                return bool(value)
+            # numpy/native 정수 → int
+            if isinstance(value, (int, np.integer)):
+                return int(value)
+            # numpy/native 실수 → float, NaN/±Inf → None
+            if isinstance(value, (float, np.floating)):
+                f = float(value)
+                if math.isnan(f) or math.isinf(f):
+                    return None
+                return f
+            return value
+
+        def _sanitize_scalar_float(value):
+            """NUMERIC 컬럼용: numpy/native float 변환, NaN/±Inf/None → None."""
+            if value is None:
+                return None
+            try:
+                f = float(value)
+            except (TypeError, ValueError):
+                return None
+            if math.isnan(f) or math.isinf(f):
+                return None
+            return f
+
+        def _sanitize_scalar_int(value):
+            """정수 컬럼용: numpy/native int 변환, NaN/None → None."""
+            if value is None:
+                return None
+            if isinstance(value, (float, np.floating)) and (math.isnan(float(value)) or math.isinf(float(value))):
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        def _build_record(result):
+            """단일 filter_result dict → 정제된 INSERT 파라미터 dict."""
+            sanitized_checks = _sanitize(result.get('filter_checks', {}))
+            # allow_nan=False로 잔여 비유한값이 있으면 로컬에서 예외 발생 (잘못된 JSON 생성 방지)
+            checks_json = json.dumps(sanitized_checks, ensure_ascii=False, allow_nan=False)
+
+            failure_reason = result.get('failure_reason')
+            if failure_reason is not None:
+                failure_reason = str(failure_reason)
+
+            return {
+                'stock_code': str(result['stock_code']),
+                'stock_name': str(result.get('stock_name', '')),
+                'filter_date': filter_date,
+                'passed': bool(result['passed']),
+                'failure_reason': failure_reason,
+                'max_quantity': _sanitize_scalar_int(result.get('max_quantity')),
+                'current_price': _sanitize_scalar_float(result.get('current_price')),
+                'filter_checks': checks_json,
+            }
+
+        if not filter_results:
+            logger.warning("No safety filter results to save")
             return False
+
+        # filter_checks는 JSONB 컬럼이므로 CAST 필요
+        insert_sql = text("""
+            INSERT INTO safety_filter_result
+                (stock_code, stock_name, filter_date, passed, failure_reason,
+                 max_quantity, current_price, filter_checks)
+            VALUES
+                (:stock_code, :stock_name, :filter_date, :passed, :failure_reason,
+                 :max_quantity, :current_price, CAST(:filter_checks AS JSONB))
+        """)
+
+        # 정제 단계: 행 단위로 실패해도 나머지 행은 보존
+        records = []
+        for result in filter_results:
+            try:
+                records.append(_build_record(result))
+            except Exception as e:
+                logger.error(
+                    f"Skipping safety filter result for "
+                    f"{result.get('stock_code', '?')}: sanitize failed: {e}"
+                )
+
+        if not records:
+            logger.warning("No valid safety filter results to save after sanitizing")
+            return False
+
+        db_conn = conn if conn is not None else self.engine
+
+        # Happy path: 단일 트랜잭션 bulk insert
+        try:
+            with db_conn.begin() as transaction:
+                transaction.execute(insert_sql, records)
+            logger.info(f"Saved {len(records)} safety filter results")
+            return True
+        except SQLAlchemyError as e:
+            logger.error(
+                f"Bulk insert of safety filter results failed, "
+                f"falling back to per-row insert: {e}"
+            )
+
+        # Fallback: 행 단위 삽입 (한 행이 나빠도 당일의 정상 행은 보존)
+        saved = 0
+        for record in records:
+            try:
+                with db_conn.begin() as transaction:
+                    transaction.execute(insert_sql, record)
+                saved += 1
+            except SQLAlchemyError as e:
+                logger.error(
+                    f"Failed to insert safety filter result for "
+                    f"{record['stock_code']}: {e}"
+                )
+
+        if saved > 0:
+            logger.info(f"Saved {saved}/{len(records)} safety filter results (per-row fallback)")
+            return True
+
+        logger.error("Error saving safety filter results: all rows failed")
+        return False
 
     def get_user_order_amount(self, user_id: int = 1) -> int:
         """

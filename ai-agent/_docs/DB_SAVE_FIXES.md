@@ -1,4 +1,4 @@
-# AI Agent Database Tables
+_# AI Agent Database Tables
 
 AI 파이프라인이 데이터를 저장하는 모든 테이블 현황 및 상세 정보.
 
@@ -559,4 +559,4 @@ python _claude/verify_db_data.py
 ## 🔗 관련 문서
 
 - [Database Schema](../database/schema.sql)
-- [Pipeline Architecture](../CLAUDE.md)
+- [Pipeline Architecture](../CLAUDE.md)_

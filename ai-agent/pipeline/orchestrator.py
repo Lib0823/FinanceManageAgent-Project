@@ -153,12 +153,18 @@ class PipelineOrchestrator:
                     'kospi_change_rate': kospi_data.get('kospi_change_rate'),  # Fixed: was 'change_rate'
                     'kospi_volume': kospi_data.get('kospi_volume'),  # Fixed: was 'volume'
                     'total_stocks': len(stock_data_df),
-                    'rising_stocks': len(stock_data_df[stock_data_df['price_change_rate'] > 0]) if 'price_change_rate' in stock_data_df.columns else None,
-                    'falling_stocks': len(stock_data_df[stock_data_df['price_change_rate'] < 0]) if 'price_change_rate' in stock_data_df.columns else None,
-                    'unchanged_stocks': len(stock_data_df[stock_data_df['price_change_rate'] == 0]) if 'price_change_rate' in stock_data_df.columns else None,
+                    # NOTE: rising/falling/unchanged 은 종목별 등락률(price_change_rate)이
+                    # 필요하나, Stage 1 수집기(kis_client.fetch_stock_data_parallel)는 현재
+                    # 해당 필드를 반환하지 않는다. 값을 임의로 만들지 않고 None 으로 둔다.
+                    # [Cross-team] 이 3개 필드를 채우려면 Stage 1 수집 단계에서 종목별
+                    # 등락률을 반환하도록 kis_client 보강이 선행되어야 한다.
+                    'rising_stocks': None,
+                    'falling_stocks': None,
+                    'unchanged_stocks': None,
                     'total_foreign_net_buy': int(stock_data_df['foreign_net_buy'].sum()) if 'foreign_net_buy' in stock_data_df.columns else None,
-                    'total_institutional_net_buy': int(stock_data_df['institution_net_buy'].sum()) if 'institution_net_buy' in stock_data_df.columns else None,
-                    'market_sentiment_score': None  # Will be updated in Stage 2-2
+                    # Fixed: 수집기 컬럼명은 'institutional_net_buy' (이전엔 'institution_net_buy' 오타로 항상 NULL)
+                    'total_institutional_net_buy': int(stock_data_df['institutional_net_buy'].sum()) if 'institutional_net_buy' in stock_data_df.columns else None,
+                    'market_sentiment_score': None  # Stage 2-2 에서 update_market_sentiment 로 갱신
                 }
 
                 market_save_success = self.db_repo.save_market_summary(market_summary, trade_date)
@@ -277,20 +283,30 @@ class PipelineOrchestrator:
 
             # Step 1: Collect DART financial data for selected stocks
             logger.info("[Stage 2-1-A] DART financial data collection")
-            dart_base_date = self._calculate_latest_dart_quarter(trade_date)
-            logger.info(f"Using DART base_date: {dart_base_date}")
+            dart_start_base_date = self._calculate_latest_dart_quarter(trade_date)
+            logger.info(f"Using DART start base_date: {dart_start_base_date}")
 
-            dart_financials_df = self.dart_client.collect_financials_for_stocks(
+            # 최신 분기가 아직 공시/적재되지 않은 DART 환경에 대비해, 데이터가 실제로
+            # 잡히는 가장 최신 분기까지 분기 단위로 거슬러 올라가며 탐색한다.
+            dart_financials_df, dart_used_base_date = self.dart_client.collect_financials_with_fallback(
                 stock_codes=selected_codes,
-                base_date=dart_base_date
+                start_base_date=dart_start_base_date,
+                max_lookback_quarters=5
             )
 
             # Save DART data to stock_financial table
             if not dart_financials_df.empty:
                 dart_save_success = self.dart_client.save_to_database(dart_financials_df)
-                logger.info(f"[Stage 2-1-A] Saved {len(dart_financials_df)} DART financial records")
+                logger.info(
+                    f"[Stage 2-1-A] Saved {len(dart_financials_df)} DART financial records "
+                    f"for quarter base_date={dart_used_base_date}"
+                )
             else:
-                logger.warning("[Stage 2-1-A] No DART data collected")
+                # 모든 fallback 분기가 실패한 경우에만 경고
+                logger.warning(
+                    f"[Stage 2-1-A] No DART data collected after fallback "
+                    f"(start={dart_start_base_date}, looked back up to 5 quarters)"
+                )
 
             # Step 2: Collect KIS quantitative features (reuse Stage 1 data)
             logger.info("[Stage 2-1-B] KIS quantitative features")
@@ -317,7 +333,7 @@ class PipelineOrchestrator:
             sentiment_df = await self.sentiment_analyzer.analyze_stocks(selected_codes)
             logger.info(f"[Stage 2-2] Sentiment analysis complete: {len(sentiment_df)} stocks")
 
-            # Save sentiment results to database
+            # Save sentiment results to database (Track 2: 종목별)
             logger.info("Saving sentiment analysis results to database")
             sentiment_saved_count = 0
             for _, row in sentiment_df.iterrows():
@@ -325,10 +341,32 @@ class PipelineOrchestrator:
                     stock_code=row['stock_code'],
                     analysis_date=trade_date,
                     sentiment_score=row['sentiment_score'],
-                    news_count=0  # News collection returns 0 articles currently
+                    news_count=int(row['news_count'])  # Fixed: 실제 분석 기사 수 (이전엔 0 하드코딩)
                 ):
                     sentiment_saved_count += 1
             logger.info(f"Saved {sentiment_saved_count} sentiment records to news_analysis table")
+
+            # Track 1(시장 전반) 영속화: analyze_stocks 가 인스턴스 속성에 저장한 값을 사용
+            market_sentiment = self.sentiment_analyzer.last_market_sentiment
+            market_news_count = self.sentiment_analyzer.last_market_news_count
+
+            # (a) market_daily_summary 의 market_sentiment_score 갱신 (Stage 1 에서 insert 된 행)
+            self.db_repo.update_market_sentiment(
+                summary_date=trade_date,
+                market_sentiment_score=market_sentiment
+            )
+
+            # (b) news_analysis 에 시장 전반 행 저장 (stock_code=NULL, 설계 §8)
+            self.db_repo.save_sentiment_analysis(
+                stock_code=None,  # NULL = 시장 전반 (트랙 1)
+                analysis_date=trade_date,
+                sentiment_score=market_sentiment,
+                news_count=market_news_count
+            )
+            logger.info(
+                f"Persisted market sentiment: score={market_sentiment:.4f}, "
+                f"news_count={market_news_count}"
+            )
 
             # Stage 2-3: Time-Series Analysis
             logger.info("[Stage 2-3] Time-Series Analysis")

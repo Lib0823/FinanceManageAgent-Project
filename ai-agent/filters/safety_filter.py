@@ -180,25 +180,35 @@ class SafetyFilter:
             check_details['per_check'] = {'passed': False, 'value': None, 'threshold': self.per_max}
             conditions.append("PER is None (loss-making company)")
 
-        # NEW Check 8: ROE >= 10%
-        roe_value = features.get('roe', 0)
-        check_details['roe_check'] = {
-            'passed': roe_value >= self.roe_min,
-            'value': roe_value,
-            'threshold': self.roe_min
-        }
-        if roe_value < self.roe_min:
-            conditions.append(f"ROE too low: {roe_value:.2f}% < {self.roe_min}%")
+        # NEW Check 8: ROE >= 10% (None/NaN 허용 - 재무데이터 결측 시 매수 제외)
+        roe_value = features.get('roe')
+        if roe_value is None or pd.isna(roe_value):
+            # ROE 결측 → 펀더멘탈 확인 불가 → 매수 제외
+            check_details['roe_check'] = {'passed': False, 'value': None, 'threshold': self.roe_min}
+            conditions.append("ROE is missing (no DART data)")
+        else:
+            check_details['roe_check'] = {
+                'passed': roe_value >= self.roe_min,
+                'value': roe_value,
+                'threshold': self.roe_min
+            }
+            if roe_value < self.roe_min:
+                conditions.append(f"ROE too low: {roe_value:.2f}% < {self.roe_min}%")
 
-        # NEW Check 9: Operating margin >= 5%
-        op_margin_value = features.get('operating_margin', 0)
-        check_details['operating_margin_check'] = {
-            'passed': op_margin_value >= self.operating_margin_min,
-            'value': op_margin_value,
-            'threshold': self.operating_margin_min
-        }
-        if op_margin_value < self.operating_margin_min:
-            conditions.append(f"Operating margin too low: {op_margin_value:.2f}% < {self.operating_margin_min}%")
+        # NEW Check 9: Operating margin >= 5% (None/NaN 허용 - 재무데이터 결측 시 매수 제외)
+        op_margin_value = features.get('operating_margin')
+        if op_margin_value is None or pd.isna(op_margin_value):
+            # 영업이익률 결측 → 펀더멘탈 확인 불가 → 매수 제외
+            check_details['operating_margin_check'] = {'passed': False, 'value': None, 'threshold': self.operating_margin_min}
+            conditions.append("Operating margin is missing (no DART data)")
+        else:
+            check_details['operating_margin_check'] = {
+                'passed': op_margin_value >= self.operating_margin_min,
+                'value': op_margin_value,
+                'threshold': self.operating_margin_min
+            }
+            if op_margin_value < self.operating_margin_min:
+                conditions.append(f"Operating margin too low: {op_margin_value:.2f}% < {self.operating_margin_min}%")
 
         # NEW Check 10: Morning return > 0
         morning_return_value = features.get('morning_return', 0)
