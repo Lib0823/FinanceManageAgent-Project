@@ -95,4 +95,21 @@ public class MarketAnalysisController {
 
         return ResponseEntity.ok(ApiResponse.success(response));
     }
+
+    /**
+     * 단일 종목 AI 분석 요약 조회 (Bot 화면 보유 종목 카드용)
+     * GET /api/market/stock-analysis/{stockCode}?date=2025-05-27
+     */
+    @GetMapping("/stock-analysis/{stockCode}")
+    public ResponseEntity<ApiResponse<StockAnalysisResponse>> getStockAnalysis(
+            @PathVariable String stockCode,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
+    ) {
+        log.info("GET /api/market/stock-analysis/{} - date: {}", stockCode, date);
+
+        // date 가 null 이면 서비스가 종목별 최신 분석일로 fallback 처리 (resolveDate 사용 안 함)
+        StockAnalysisResponse response = marketAnalysisService.getStockAnalysis(stockCode, date);
+
+        return ResponseEntity.ok(ApiResponse.success(response));
+    }
 }

@@ -80,12 +80,14 @@ public class MarketAnalysisRepository {
         BigDecimal sentimentScore = sentimentResults.isEmpty() ? null : sentimentResults.get(0);
 
         // 종목별 감성 분포 조회 (Top30 종목 기준) - 없을 수 있음
+        // avg_sentiment: 시장 전반 sentiment가 NULL일 때 fallback으로 사용
         String distributionSql = """
             SELECT
                 COUNT(*) FILTER (WHERE na.sentiment_score >= 0.3) as positive_count,
                 COUNT(*) FILTER (WHERE na.sentiment_score BETWEEN -0.3 AND 0.3) as neutral_count,
                 COUNT(*) FILTER (WHERE na.sentiment_score <= -0.3) as negative_count,
-                COUNT(*) as total_count
+                COUNT(*) as total_count,
+                AVG(na.sentiment_score) as avg_sentiment
             FROM news_analysis na
             JOIN stock_filter_score sfs
                 ON na.stock_code = sfs.stock_code
@@ -141,15 +143,19 @@ public class MarketAnalysisRepository {
 
     /**
      * 최신 분석 날짜 조회
-     * stock_filter_score, ai_trade_decision, news_analysis 중 가장 최신 날짜 반환
+     * 파이프라인 전체 단계(stock_filter_score, ai_trade_decision, news_analysis,
+     * prophet_forecast)가 모두 완료된 날짜 중 가장 최신 날짜를 반환한다.
+     * 4개 테이블에 동시에 존재하는 날짜만 "완전한 파이프라인"으로 간주하여,
+     * Stage-1 필터링만 실행된 미완성 날짜를 제외한다.
      */
     public LocalDate getLatestAnalysisDate() {
         String sql = """
-            SELECT GREATEST(
-                (SELECT MAX(score_date) FROM stock_filter_score WHERE is_selected = true),
-                (SELECT MAX(decision_date) FROM ai_trade_decision),
-                (SELECT MAX(analysis_date) FROM news_analysis WHERE stock_code IS NOT NULL)
-            ) as latest_date
+            SELECT MAX(d) as latest_date FROM (
+                SELECT DISTINCT score_date AS d FROM stock_filter_score WHERE is_selected = true
+                INTERSECT SELECT DISTINCT decision_date FROM ai_trade_decision
+                INTERSECT SELECT DISTINCT analysis_date FROM news_analysis WHERE stock_code IS NOT NULL
+                INTERSECT SELECT DISTINCT forecast_date FROM prophet_forecast
+            ) t
             """;
 
         List<LocalDate> results = jdbcTemplate.queryForList(sql, LocalDate.class);
@@ -182,7 +188,14 @@ public class MarketAnalysisRepository {
                 -- Stage 2-3 시계열 지표
                 pf.price_trend,
                 pf.volume_trend,
-                pf.price_uncertainty
+                pf.price_uncertainty,
+                pf.yhat_d1,
+                pf.yhat_d2,
+                pf.yhat_d3,
+                pf.yhat_d4,
+                pf.yhat_d5,
+                pf.yhat_upper_d5,
+                pf.yhat_lower_d5
             FROM stock_filter_score sfs
             LEFT JOIN stock_financial sf
                 ON sfs.stock_code = sf.stock_code
@@ -203,5 +216,69 @@ public class MarketAnalysisRepository {
             """;
 
         return jdbcTemplate.queryForList(sql, date);
+    }
+
+    /**
+     * 단일 종목 큐레이션 피처 조회 (Top30 선정 종목 기준).
+     * stock_filter_score(is_selected=true)를 기준으로
+     * news_analysis / prophet_forecast / stock_financial(최신 base_date)을 LEFT JOIN.
+     * 해당 날짜에 분석 대상이 아니면 null 반환.
+     */
+    public Map<String, Object> getStockFeatures(String stockCode, LocalDate date) {
+        String sql = """
+            SELECT
+                sfs.stock_name,
+                sfs.foreign_net_buy,
+                sfs.institutional_net_buy,
+                sfs.vol_avg_multiple,
+                sfs.morning_return,
+                sfs.close_position,
+                na.sentiment_score,
+                na.news_count,
+                pf.price_trend,
+                pf.yhat_d1,
+                pf.yhat_d5,
+                pf.price_uncertainty,
+                sf.per,
+                sf.roe,
+                sf.operating_margin
+            FROM stock_filter_score sfs
+            LEFT JOIN news_analysis na
+                ON sfs.stock_code = na.stock_code
+                AND sfs.score_date = na.analysis_date
+            LEFT JOIN prophet_forecast pf
+                ON sfs.stock_code = pf.stock_code
+                AND sfs.score_date = pf.forecast_date
+            LEFT JOIN stock_financial sf
+                ON sfs.stock_code = sf.stock_code
+                AND sf.base_date = (
+                    SELECT MAX(base_date)
+                    FROM stock_financial sf2
+                    WHERE sf2.stock_code = sfs.stock_code
+                )
+            WHERE sfs.stock_code = ?
+                AND sfs.score_date = ?
+                AND sfs.is_selected = TRUE
+            """;
+
+        List<Map<String, Object>> results = jdbcTemplate.queryForList(sql, stockCode, date);
+        return results.isEmpty() ? null : results.get(0);
+    }
+
+    /**
+     * 단일 종목의 가장 최근 분석 날짜 조회 (is_selected=true 기준).
+     * 보유 종목이 당일 Top30에서 탈락해도 직전 분석일 데이터로 fallback 하기 위해 사용.
+     * 한 번도 분석 대상에 포함된 적이 없으면 null 반환.
+     */
+    public LocalDate getLatestStockScoreDate(String stockCode) {
+        String sql = """
+            SELECT MAX(score_date)
+            FROM stock_filter_score
+            WHERE stock_code = ?
+                AND is_selected = TRUE
+            """;
+
+        List<LocalDate> results = jdbcTemplate.queryForList(sql, LocalDate.class, stockCode);
+        return results.isEmpty() ? null : results.get(0);
     }
 }
