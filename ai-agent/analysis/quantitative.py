@@ -238,8 +238,12 @@ class QuantitativeAnalyzer:
         """
         clipped_df = df.copy()
 
-        # Define columns to clip (exclude stock_code, per, roe, operating_margin)
+        # 클리핑 대상: KIS 수급/가격 피처 4개 (stock_code, DART 피처 제외)
         clip_columns = ['morning_return', 'close_position', 'foreign_net_buy', 'institutional_net_buy']
+
+        # DART 피처는 설계상 결측·적자 시 None/NaN 유지 (fillna(0) 금지)
+        # → decision_generator._format_per 가 "적자 또는 결측"으로 표시
+        dart_columns = ['per', 'roe', 'operating_margin']
 
         for col in clip_columns:
             if col in clipped_df.columns:
@@ -251,9 +255,13 @@ class QuantitativeAnalyzer:
                     p1 = np.percentile(valid_values, 1)
                     clipped_df[col] = clipped_df[col].clip(lower=p1, upper=p99)
 
-        # Replace NaN and Infinity with safe values for JSON serialization
+        # JSON 직렬화 안전성: inf → nan 변환은 전체 컬럼에 적용
         clipped_df = clipped_df.replace([np.inf, -np.inf], np.nan)
-        clipped_df = clipped_df.fillna(0)
+
+        # KIS 피처만 nan → 0 (기본값 허용). DART 피처는 NaN/None 보존
+        kis_fill_columns = [col for col in clip_columns if col in clipped_df.columns]
+        if kis_fill_columns:
+            clipped_df[kis_fill_columns] = clipped_df[kis_fill_columns].fillna(0)
 
         return clipped_df
 
