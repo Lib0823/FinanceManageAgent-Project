@@ -146,13 +146,12 @@ export const tradingApi = {
 //   search: (query) => api.get('/stocks/search', { params: { q: query } })
 // }
 
-// Company API (Not implemented)
-// export const companyApi = {
-//   getInfo: (symbol) => api.get(`/companies/${symbol}`),
-//   getFinancials: (symbol) => api.get(`/companies/${symbol}/financials`),
-//   getDisclosures: (symbol) => api.get(`/companies/${symbol}/disclosures`),
-//   getAiAnalysis: (symbol) => api.get(`/companies/${symbol}/ai-analysis`)
-// }
+// Company API (Spring Boot api-server)
+export const companyApi = {
+  getBasicInfo: (stockCode) => api.get(`/company/${stockCode}/basic-info`),
+  getFinancials: (stockCode) => api.get(`/company/${stockCode}/financials`),
+  getDisclosures: (stockCode) => api.get(`/company/${stockCode}/disclosures`)
+}
 
 // News API (Handled by FastAPI ai-agent)
 export const newsApi = {
@@ -185,7 +184,9 @@ export const marketAnalysisApi = {
   getLatestDate: () => api.get('/market/latest-date'),
   getHeatmap: (date) => api.get('/market/heatmap', { params: date ? { date } : {} }),
   getStockAnalysis: (stockCode, date) =>
-    api.get(`/market/stock-analysis/${stockCode}`, { params: date ? { date } : {} })
+    api.get(`/market/stock-analysis/${stockCode}`, { params: date ? { date } : {} }),
+  getStockDetail: (stockCode, date) =>
+    api.get(`/market/stock-detail/${stockCode}`, { params: date ? { date } : {} })
 }
 
 export default api
