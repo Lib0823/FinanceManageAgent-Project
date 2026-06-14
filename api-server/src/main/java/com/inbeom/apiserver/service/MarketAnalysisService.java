@@ -438,6 +438,170 @@ public class MarketAnalysisService {
     }
 
     /**
+     * 단일 종목 AI 분석 상세 조회 (종목 상세 화면 AI 분석 탭용).
+     * - 데이터 소스: stock_filter_score / news_analysis(종목) / prophet_forecast / stock_financial
+     *   + 시장 감성/분포는 getMarketSentiment(targetDate) 재사용
+     * - date 가 null 이면 해당 종목의 "가장 최근 분석일"로 fallback (getStockAnalysis 와 동일 패턴).
+     *   분석 이력이 전혀 없으면 has_analysis=false, 3개 섹션(quant/sentiment/timeseries)은 null.
+     * - 응답: 정량(quant) / 감성(sentiment) / 시계열(timeseries) 3개 섹션.
+     */
+    @Transactional(readOnly = true)
+    public StockDetailAnalysisResponse getStockDetailAnalysis(String stockCode, LocalDate date) {
+        try {
+            // 종목별 날짜 해석: 명시된 date 우선, 없으면 해당 종목 최신 분석일로 fallback
+            LocalDate targetDate = (date != null)
+                    ? date
+                    : marketAnalysisRepository.getLatestStockScoreDate(stockCode);
+
+            Map<String, Object> features = (targetDate != null)
+                    ? marketAnalysisRepository.getStockDetailFeatures(stockCode, targetDate)
+                    : null;
+
+            // 분석 이력이 전혀 없는 종목 (분석 유니버스 미포함)
+            if (features == null) {
+                return StockDetailAnalysisResponse.builder()
+                        .stockCode(stockCode)
+                        .stockName(null)
+                        .analysisDate(targetDate)
+                        .hasAnalysis(false)
+                        .quant(null)
+                        .sentiment(null)
+                        .timeseries(null)
+                        .build();
+            }
+
+            String stockName = (String) features.get("stock_name");
+
+            // ── 정량(quant) 섹션 ─────────────────────────────────────────
+            StockDetailAnalysisResponse.Quant quant = StockDetailAnalysisResponse.Quant.builder()
+                    .foreignNetBuy(toLong(features.get("foreign_net_buy")))
+                    .institutionalNetBuy(toLong(features.get("institutional_net_buy")))
+                    .morningReturn(toBigDecimal(features.get("morning_return")))
+                    .closePosition(toBigDecimal(features.get("close_position")))
+                    .volAvgMultiple(toBigDecimal(features.get("vol_avg_multiple")))
+                    .priceVolatility(toBigDecimal(features.get("price_volatility")))
+                    .per(toBigDecimal(features.get("per")))
+                    .roe(toBigDecimal(features.get("roe")))
+                    .operatingMargin(toBigDecimal(features.get("operating_margin")))
+                    .build();
+
+            // ── 감성(sentiment) 섹션 ──────────────────────────────────────
+            // 종목별 감성은 features 행에서, 시장 전반/분포는 getMarketSentiment 재사용
+            BigDecimal stockSentimentScore = toBigDecimal(features.get("sentiment_score"));
+            Integer stockNewsCount = features.get("news_count") != null
+                    ? toInt(features.get("news_count"))
+                    : null;
+
+            // 시장 전반 감성은 비치명적: 실패해도 종목 상세 응답은 정상 반환
+            BigDecimal marketSentimentScore = null;
+            StockDetailAnalysisResponse.Sentiment.Distribution marketDistribution = null;
+            Integer marketNewsCount = null;
+
+            try {
+                MarketSentimentResponse marketSentiment = getMarketSentiment(targetDate);
+
+                marketSentimentScore = marketSentiment.getScore();
+
+                MarketSentimentResponse.Distribution dist = marketSentiment.getDistribution();
+                if (dist != null) {
+                    int positiveCount = dist.getPositive() != null ? toInt(dist.getPositive().getCount()) : 0;
+                    int neutralCount = dist.getNeutral() != null ? toInt(dist.getNeutral().getCount()) : 0;
+                    int negativeCount = dist.getNegative() != null ? toInt(dist.getNegative().getCount()) : 0;
+                    int totalCount = positiveCount + neutralCount + negativeCount;
+
+                    marketDistribution = StockDetailAnalysisResponse.Sentiment.Distribution.builder()
+                            .positiveCount(positiveCount)
+                            .neutralCount(neutralCount)
+                            .negativeCount(negativeCount)
+                            .positivePercent(calculatePercent(positiveCount, totalCount))
+                            .neutralPercent(calculatePercent(neutralCount, totalCount))
+                            .negativePercent(calculatePercent(negativeCount, totalCount))
+                            .build();
+
+                    // 시장 뉴스 건수는 별도 컬럼이 없어 분포 합계(total)로 대체, 분포 없으면 null
+                    marketNewsCount = totalCount > 0 ? totalCount : null;
+                }
+            } catch (Exception e) {
+                log.warn("시장 감성 조회 실패, 시장 필드는 null 처리하고 계속 진행: stockCode={}, date={}, error={}",
+                        stockCode, targetDate, e.getMessage());
+            }
+
+            StockDetailAnalysisResponse.Sentiment sentiment = StockDetailAnalysisResponse.Sentiment.builder()
+                    .stockSentimentScore(stockSentimentScore)
+                    .stockNewsCount(stockNewsCount)
+                    .marketSentimentScore(marketSentimentScore)
+                    .marketNewsCount(marketNewsCount)
+                    .marketDistribution(marketDistribution)
+                    .timeRange("전날 18:00 — 당일 08:50")
+                    .marketSources("한경 · 매경 · 연합")
+                    .build();
+
+            // ── 시계열(timeseries) 섹션 ───────────────────────────────────
+            List<StockDetailAnalysisResponse.Timeseries.Forecast> forecasts = new ArrayList<>();
+            for (int d = 1; d <= 5; d++) {
+                BigDecimal yhat = toBigDecimal(features.get("yhat_d" + d));
+                // yhat_dN 이 없는 날짜는 제외 (데이터가 있는 D+N 항목만 포함)
+                if (yhat == null) {
+                    continue;
+                }
+                StockDetailAnalysisResponse.Timeseries.Forecast forecast = buildForecast(
+                        d,
+                        yhat,
+                        toBigDecimal(features.get("yhat_upper_d" + d)),
+                        toBigDecimal(features.get("yhat_lower_d" + d)));
+                forecasts.add(forecast);
+            }
+
+            StockDetailAnalysisResponse.Timeseries timeseries = StockDetailAnalysisResponse.Timeseries.builder()
+                    .priceTrend(toBigDecimal(features.get("price_trend")))
+                    .volumeTrend(toBigDecimal(features.get("volume_trend")))
+                    .priceUncertainty(toBigDecimal(features.get("price_uncertainty")))
+                    .trainingDays(120)
+                    .forecasts(forecasts)
+                    .build();
+
+            return StockDetailAnalysisResponse.builder()
+                    .stockCode(stockCode)
+                    .stockName(stockName)
+                    .analysisDate(targetDate)
+                    .hasAnalysis(true)
+                    .quant(quant)
+                    .sentiment(sentiment)
+                    .timeseries(timeseries)
+                    .build();
+        } catch (Exception e) {
+            log.error("Failed to get stock detail analysis for stockCode: {}, date: {}", stockCode, date, e);
+            throw new RuntimeException("Failed to get stock detail analysis", e);
+        }
+    }
+
+    /**
+     * D+N 예측 1건 구성.
+     * uncertainty_pct = (yhat_upper - yhat_lower) / yhat * 100 (소수 1자리).
+     * yhat 이 null 이거나 <= 0 이면, 또는 상·하한 중 하나라도 null 이면 uncertainty_pct 는 null.
+     */
+    private StockDetailAnalysisResponse.Timeseries.Forecast buildForecast(
+            int day, BigDecimal yhat, BigDecimal yhatUpper, BigDecimal yhatLower) {
+
+        BigDecimal uncertaintyPct = null;
+        if (yhat != null && yhat.compareTo(BigDecimal.ZERO) > 0
+                && yhatUpper != null && yhatLower != null) {
+            uncertaintyPct = yhatUpper.subtract(yhatLower)
+                    .divide(yhat, 6, RoundingMode.HALF_UP)
+                    .multiply(BigDecimal.valueOf(100))
+                    .setScale(1, RoundingMode.HALF_UP);
+        }
+
+        return StockDetailAnalysisResponse.Timeseries.Forecast.builder()
+                .day("D+" + day)
+                .yhat(yhat)
+                .yhatUpper(yhatUpper)
+                .yhatLower(yhatLower)
+                .uncertaintyPct(uncertaintyPct)
+                .build();
+    }
+
+    /**
      * 한두 문장 자연어 요약 구성. 수급 → 5일 예측 → 감성 순으로 데이터가 있는 절만 연결한다.
      */
     private String buildHeadline(
@@ -618,7 +782,7 @@ public class MarketAnalysisService {
                     null);
             MarketHeatmapResponse.FinancialHealth emptyHealth = buildFinancialHealth(
                     0,
-                    BigDecimal.ZERO, 0,
+                    null, 0,
                     BigDecimal.ZERO, 0,
                     BigDecimal.ZERO, 0,
                     0, 0, 0,
@@ -671,7 +835,8 @@ public class MarketAnalysisService {
         BigDecimal maxExpectedReturn = null;
 
         // FinancialHealth 누적기
-        BigDecimal sumPer = BigDecimal.ZERO;
+        // PER은 소수 고PER 종목이 평균을 크게 왜곡하므로 중앙값(median)으로 대표값을 산출한다.
+        List<BigDecimal> perValues = new ArrayList<>();
         BigDecimal sumRoe = BigDecimal.ZERO;
         BigDecimal sumMargin = BigDecimal.ZERO;
         int perCount = 0;
@@ -772,11 +937,12 @@ public class MarketAnalysisService {
             boolean isHighRoe = false;
             boolean isHighMargin = false;
 
-            if (s.getPer() != null) {
-                sumPer = sumPer.add(s.getPer());
+            // 음수 PER(적자기업)은 "저평가"가 아니라 손실 신호이므로 평균/저평가 집계에서 제외.
+            // 평균 PER이 적자기업의 큰 음수값으로 왜곡되는 문제를 방지한다.
+            if (s.getPer() != null && s.getPer().compareTo(BigDecimal.ZERO) > 0) {
+                perValues.add(s.getPer());
                 perCount++;
-                if (s.getPer().compareTo(BigDecimal.valueOf(15)) < 0
-                        && s.getPer().compareTo(BigDecimal.ZERO) > 0) {
+                if (s.getPer().compareTo(BigDecimal.valueOf(15)) < 0) {
                     undervaluedCount++;
                     isUnderval = true;
                 }
@@ -798,7 +964,10 @@ public class MarketAnalysisService {
                 }
             }
 
-            if (isUnderval && isHighRoe && isHighMargin) {
+            // 펀더멘탈 우수: 저평가(PER<15)·고ROE(>15%)·고마진(>10%) 3개 중 2개 이상 충족.
+            // 3개 동시 충족(AND)은 실제 종목 유니버스에서 거의 0이라 의미가 없어 2-of-3으로 완화.
+            int qualityHits = (isUnderval ? 1 : 0) + (isHighRoe ? 1 : 0) + (isHighMargin ? 1 : 0);
+            if (qualityHits >= 2) {
                 excellentCount++;
             }
         }
@@ -818,9 +987,10 @@ public class MarketAnalysisService {
                 sumAnchorPrice, anchorPriceCount,
                 topOutlook);
 
+        BigDecimal medianPer = median(perValues);
         MarketHeatmapResponse.FinancialHealth health = buildFinancialHealth(
                 stocks.size(),
-                sumPer, perCount,
+                medianPer, perCount,
                 sumRoe, roeCount,
                 sumMargin, marginCount,
                 undervaluedCount, highRoeCount, highMarginCount,
@@ -923,7 +1093,7 @@ public class MarketAnalysisService {
      */
     private MarketHeatmapResponse.FinancialHealth buildFinancialHealth(
             int totalStocks,
-            BigDecimal sumPer, int perCount,
+            BigDecimal medianPer, int perCount,
             BigDecimal sumRoe, int roeCount,
             BigDecimal sumMargin, int marginCount,
             int undervaluedCount, int highRoeCount, int highMarginCount,
@@ -931,9 +1101,8 @@ public class MarketAnalysisService {
 
         int dataCoverage = totalStocks > 0 ? (withDartCount * 100 / totalStocks) : 0;
 
-        BigDecimal avgPer = perCount > 0
-                ? sumPer.divide(BigDecimal.valueOf(perCount), 2, RoundingMode.HALF_UP)
-                : null;
+        // avgPer 필드에는 (평균이 아닌) 양수 PER의 중앙값을 담는다 — 고PER 이상치 왜곡 방지.
+        BigDecimal avgPer = (perCount > 0) ? medianPer : null;
         BigDecimal avgRoe = roeCount > 0
                 ? sumRoe.divide(BigDecimal.valueOf(roeCount), 2, RoundingMode.HALF_UP)
                 : null;
@@ -1174,6 +1343,22 @@ public class MarketAnalysisService {
     // PostgreSQL NUMERIC → BigDecimal, BIGINT → Long, INT → Integer
     // 드라이버/Aggregate 결과에 따라 Double/BigInteger 등으로 올 수 있어 방어적 변환
     // ============================================================
+
+    /** 값 리스트의 중앙값 (2자리 반올림). 빈/널이면 null. */
+    private static BigDecimal median(List<BigDecimal> values) {
+        if (values == null || values.isEmpty()) {
+            return null;
+        }
+        List<BigDecimal> sorted = new ArrayList<>(values);
+        sorted.sort((a, b) -> a.compareTo(b));
+        int n = sorted.size();
+        if (n % 2 == 1) {
+            return sorted.get(n / 2).setScale(2, RoundingMode.HALF_UP);
+        }
+        return sorted.get(n / 2 - 1)
+                .add(sorted.get(n / 2))
+                .divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
+    }
 
     private static BigDecimal toBigDecimal(Object value) {
         if (value == null) return null;
