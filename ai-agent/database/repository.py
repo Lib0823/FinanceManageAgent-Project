@@ -238,24 +238,59 @@ class DatabaseRepository:
 
         Returns:
             True if successful, False otherwise
-        """
-        try:
-            import pandas as pd
-            df = pd.DataFrame([{
-                'stock_code': stock_code,
-                'analysis_date': analysis_date,
-                'sentiment_score': sentiment_score,
-                'news_count': news_count
-            }])
 
-            # Use engine from session_factory
-            df.to_sql('news_analysis', self.engine, if_exists='append', index=False)
-            logger.debug(f"Saved sentiment analysis for {stock_code}: {sentiment_score:.2f}")
+        Note:
+            news_analysis 에는 UNIQUE(stock_code, analysis_date) 제약이 있다.
+            (단, Postgres 에서 NULL 은 서로 distinct 하므로 stock_code IS NULL 인
+             시장 전반 행은 제약만으로는 중복을 막지 못한다.)
+            따라서 단순 append 대신 "같은 (stock_code, analysis_date) 행을 먼저
+            삭제 후 삽입"하는 upsert 로 동작시켜, 재실행/시장행 중복을 모두 방지한다.
+        """
+        session = self.session_factory()
+        try:
+            if stock_code is None:
+                # 시장 전반(Track 1) 행: NULL 은 unique 제약으로 중복 차단이 안 되므로
+                # IS NULL 매칭으로 명시적으로 기존 행을 제거한 뒤 1건만 삽입한다.
+                session.execute(
+                    text(
+                        "DELETE FROM news_analysis "
+                        "WHERE stock_code IS NULL AND analysis_date = :d"
+                    ),
+                    {'d': analysis_date}
+                )
+                session.execute(
+                    text(
+                        "INSERT INTO news_analysis "
+                        "(stock_code, analysis_date, sentiment_score, news_count) "
+                        "VALUES (NULL, :d, :s, :n)"
+                    ),
+                    {'d': analysis_date, 's': sentiment_score, 'n': news_count}
+                )
+            else:
+                # 종목별(Track 2) 행: 재실행 시 unique 제약 위반을 피하기 위해
+                # 동일 키 행을 갱신하거나(ON CONFLICT) 신규 삽입한다.
+                session.execute(
+                    text(
+                        "INSERT INTO news_analysis "
+                        "(stock_code, analysis_date, sentiment_score, news_count) "
+                        "VALUES (:c, :d, :s, :n) "
+                        "ON CONFLICT (stock_code, analysis_date) DO UPDATE SET "
+                        "sentiment_score = EXCLUDED.sentiment_score, "
+                        "news_count = EXCLUDED.news_count"
+                    ),
+                    {'c': stock_code, 'd': analysis_date, 's': sentiment_score, 'n': news_count}
+                )
+
+            session.commit()
+            logger.debug(f"Saved sentiment analysis for {stock_code}: {sentiment_score:.4f}")
             return True
 
-        except Exception as e:
+        except SQLAlchemyError as e:
+            session.rollback()
             logger.error(f"Error saving sentiment analysis for {stock_code}: {e}")
             return False
+        finally:
+            session.close()
 
     def save_market_summary(
         self,

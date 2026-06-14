@@ -698,17 +698,52 @@ class KISClient:
 
         return df
 
-    async def get_current_price(self, stock_code: str) -> Dict[str, float]:
+    @staticmethod
+    def _parse_kis_float(value: Optional[str]) -> Optional[float]:
         """
-        Get current stock price for investment limit calculation.
+        KIS 시세 응답의 숫자 문자열을 float 로 안전 변환.
+
+        KIS inquire-price 응답의 per/pbr/eps 등은 문자열이며, 적자/결측 종목은
+        ''(빈 문자열) 또는 '0' / '0.00' 으로 내려온다. 이런 값은 의미 있는 지표가
+        아니므로 None 으로 정규화한다 (PER=0 은 현실적으로 존재하지 않음).
+
+        Args:
+            value: KIS output 의 문자열 값
+
+        Returns:
+            float 값, 또는 빈값/0/파싱 실패 시 None
+        """
+        if value is None:
+            return None
+        try:
+            cleaned = str(value).replace(',', '').strip()
+            if cleaned == '':
+                return None
+            parsed = float(cleaned)
+            # 0 은 적자/미산출을 의미하는 placeholder → None 으로 처리
+            if parsed == 0.0:
+                return None
+            return parsed
+        except (ValueError, TypeError):
+            return None
+
+    async def get_current_price(self, stock_code: str) -> Dict[str, Optional[float]]:
+        """
+        Get current stock price (and valuation metrics) from KIS.
 
         Args:
             stock_code: 6-digit stock code
 
         Returns:
-            Dict with current_price (현재가)
+            Dict with:
+                - current_price (현재가, int; 실패 시 0)
+                - per (주가수익비율, float 또는 None)
+                - pbr (주가순자산비율, float 또는 None)
+                - eps (주당순이익, float 또는 None)
 
-        API: FHKST01010100 (주식현재가 시세)
+        API: FHKST01010100 (주식현재가 시세).
+        output 에 per/pbr/eps 가 함께 포함되므로 별도 호출 없이 밸류에이션을 얻는다.
+        적자/결측 종목의 per/eps 는 '0'/'' 로 내려오며 None 으로 정규화한다.
         """
         logger.debug(f"Fetching current price for {stock_code}")
 
@@ -729,19 +764,76 @@ class KISClient:
                     output = result['output']
                     current_price = int(output['stck_prpr'])  # 주식 현재가
 
-                    logger.debug(f"Current price for {stock_code}: {current_price:,}원")
+                    per = self._parse_kis_float(output.get('per'))
+                    pbr = self._parse_kis_float(output.get('pbr'))
+                    eps = self._parse_kis_float(output.get('eps'))
+
+                    logger.debug(
+                        f"Price/valuation for {stock_code}: {current_price:,}원, "
+                        f"PER={per}, PBR={pbr}, EPS={eps}"
+                    )
 
                     return {
-                        'current_price': current_price
+                        'current_price': current_price,
+                        'per': per,
+                        'pbr': pbr,
+                        'eps': eps
                     }
                 else:
                     error_msg = result.get('msg1', 'Unknown error')
                     logger.error(f"Failed to fetch current price for {stock_code}: {error_msg}")
-                    return {'current_price': 0}
+                    return {'current_price': 0, 'per': None, 'pbr': None, 'eps': None}
 
         except Exception as e:
             logger.exception(f"Exception while fetching current price for {stock_code}: {e}")
-            return {'current_price': 0}
+            return {'current_price': 0, 'per': None, 'pbr': None, 'eps': None}
+
+    async def get_valuation(self, stock_code: str) -> Dict[str, Optional[float]]:
+        """
+        Fetch valuation metrics (PER/PBR/EPS) for a stock from KIS inquire-price.
+
+        get_current_price 의 얇은 래퍼. 재무지표(stock_financial.per) 보강 단계에서
+        의도를 명확히 드러내기 위해 제공한다.
+
+        Args:
+            stock_code: 6-digit stock code
+
+        Returns:
+            Dict with keys per/pbr/eps (각각 float 또는 None)
+        """
+        price_data = await self.get_current_price(stock_code)
+        return {
+            'per': price_data.get('per'),
+            'pbr': price_data.get('pbr'),
+            'eps': price_data.get('eps')
+        }
+
+    async def get_valuations_for_stocks(
+        self,
+        stock_codes: List[str]
+    ) -> Dict[str, Optional[float]]:
+        """
+        Fetch PER for multiple stocks (rate-limited, sequential).
+
+        stock_financial.per 보강용. Stage 2-1(재무) 단계에서 DART 가 채우지 못하는
+        PER 을 KIS 시세로 채우기 위해 사용한다. 각 호출은 get_current_price 의
+        Semaphore + 0.2s 지연을 통해 5 req/sec 제한을 준수한다.
+
+        Args:
+            stock_codes: 6-digit 종목코드 리스트
+
+        Returns:
+            {stock_code: per(float|None)} 매핑
+        """
+        per_map: Dict[str, Optional[float]] = {}
+        for stock_code in stock_codes:
+            try:
+                valuation = await self.get_valuation(stock_code)
+                per_map[stock_code] = valuation.get('per')
+            except Exception as e:
+                logger.warning(f"Valuation fetch failed for {stock_code}: {e}")
+                per_map[stock_code] = None
+        return per_map
 
     async def get_kospi_index(self, trade_date: Optional[str] = None) -> Dict[str, float]:
         """

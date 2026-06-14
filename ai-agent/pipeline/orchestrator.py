@@ -294,6 +294,18 @@ class PipelineOrchestrator:
                 max_lookback_quarters=5
             )
 
+            # Step 1b: Enrich PER from KIS 시세 (DART 재무제표만으로는 PER 산출 불가:
+            # 현재가·발행주식수 미포함). KIS inquire-price output.per 로 보강한다.
+            # 적자/결측 종목은 None 유지(null-safe).
+            if not dart_financials_df.empty:
+                per_codes = dart_financials_df['stock_code'].astype(str).tolist()
+                per_map = await self.kis_client.get_valuations_for_stocks(per_codes)
+                dart_financials_df['per'] = dart_financials_df['stock_code'].astype(str).map(per_map)
+                filled = dart_financials_df['per'].notna().sum()
+                logger.info(
+                    f"[Stage 2-1-A] Enriched PER from KIS for {filled}/{len(dart_financials_df)} stocks"
+                )
+
             # Save DART data to stock_financial table
             if not dart_financials_df.empty:
                 dart_save_success = self.dart_client.save_to_database(dart_financials_df)
