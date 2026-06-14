@@ -75,7 +75,7 @@ jasypt:
 
 # KIS API Configuration
 kis:
-  # Base URL
+  # Base URL (모의투자 - 매매/잔고 흐름 전용, 변경 금지)
   # - 모의투자: https://openapivts.koreainvestment.com:29443
   # - 실전투자: https://openapi.koreainvestment.com:9443
   base-url: https://openapivts.koreainvestment.com:29443
@@ -83,6 +83,20 @@ kis:
   # Access Token 캐시 TTL
   # KIS API Access Token은 24시간 유효
   token-cache-ttl: 86400000  # 24 hours (ms)
+
+  # 시세/재무 전용 실전(real) 도메인 + 실전 자격증명.
+  # CompanyInfoService(기본정보/재무제표)만 사용한다. 매매 흐름(base-url, DB 모의키)과 분리.
+  # KIS 시세/재무 API는 모의(openapivts) 도메인에서 제공되지 않으므로 실전 도메인으로 호출한다.
+  # quote-app-key/secret 둘 다 비어있으면 시세/재무 연동 비활성(필드 null + notice).
+  quote-base-url: ${KIS_QUOTE_BASE_URL:https://openapi.koreainvestment.com:9443}
+  quote-app-key: ${KIS_QUOTE_APP_KEY:}
+  quote-app-secret: ${KIS_QUOTE_APP_SECRET:}
+
+# DART (금융감독원 전자공시) Open API Configuration
+dart:
+  # 발급키: https://opendart.fss.or.kr (없으면 DART 연동 비활성, DART 필드는 null)
+  api-key: ${DART_API_KEY:}
+  base-url: https://opendart.fss.or.kr/api
 
 # CORS Configuration
 cors:
