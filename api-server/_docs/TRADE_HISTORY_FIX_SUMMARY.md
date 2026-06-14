@@ -36,7 +36,7 @@ TransactionsView에서 거래내역이 비어있는 문제 발생
 | user_id | username | name | account_number | app_key | 용도 |
 |---------|----------|------|----------------|---------|------|
 | 1 | testuser | 테스트유저 | 50000000 | ENC(test_encrypted_app_key_placeholder) | 테스트 전용 |
-| 8 | ib.lee | 이인범 | 50187173 | PSeTJxnzlAjc0WKeijyeQpuD7aEHhfBb4jv5 | 실제 KIS 모의투자 |
+| 8 | ib.lee | 이인범 | YOUR_KIS_ACCOUNT_NO | YOUR_KIS_APP_KEY | 실제 KIS 모의투자 |
 
 **SQL 스크립트**: `update_kis_direct.sql`
 - testuser(user_id=1): 테스트 데이터로 복구
@@ -62,9 +62,9 @@ TransactionsView에서 거래내역이 비어있는 문제 발생
 ### 올바른 설정 ✅
 - **도메인**: `https://openapivts.koreainvestment.com:29443` (모의투자)
 - **TR_ID**: `VTTC0081R` (모의투자 주식일별주문체결조회)
-- **계좌번호**: `50187173`
+- **계좌번호**: `YOUR_KIS_ACCOUNT_NO`
 - **상품코드**: `01`
-- **AppKey**: `PSeTJxnzlAjc0WKeijyeQpuD7aEHhfBb4jv5`
+- **AppKey**: `YOUR_KIS_APP_KEY`
 
 ## 남은 작업
 

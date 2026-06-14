@@ -9,9 +9,9 @@ import json
 from datetime import datetime, timedelta
 
 # KIS 계정 정보 (dev_note.txt에서 제공받은 정보)
-APP_KEY = "PSeTJxnzlAjc0WKeijyeQpuD7aEHhfBb4jv5"
-APP_SECRET = "d5UVrY6J0EnF3w0/K4gd22gs5VmSOvrNB1vkXVp8RSlu4LW2d1oZvLYYB7cHshNhinQrvC4uBggOwejuPMnbS9uuBNbHSI0QfAkj88CjXss12kVwxPt8dOHFx9Fywo6VhFu9yqICSAlukQ3OcuKr2Ui/44YKzj71jw+W7R2jo/Mx6Sj9oU8="
-ACCOUNT = "50187173"
+APP_KEY = "YOUR_KIS_APP_KEY"
+APP_SECRET = "YOUR_KIS_APP_SECRET"
+ACCOUNT = "YOUR_KIS_ACCOUNT_NO"
 ACCOUNT_PRODUCT_CODE = "01"  # 종합계좌
 
 # KIS API Base URL (모의투자)

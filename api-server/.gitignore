@@ -1,4 +1,10 @@
 HELP.md
+
+### Environment / secrets ###
+.env
+.env.local
+.env.*.local
+
 .gradle
 build/
 !gradle/wrapper/gradle-wrapper.jar
