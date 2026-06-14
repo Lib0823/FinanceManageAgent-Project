@@ -247,8 +247,6 @@ const fetchMarketData = async () => {
       }
 
       buyTop3.value = (decisions.buy_top3 || []).map(stock => {
-        // confidence_score가 NULL이면 0으로 도착 → 의미 없는 점수이므로 null 처리
-        const score = stock.score ? stock.score : null
         return {
           rank: stock.rank,
           icon: getStockIcon(stock.stock_name),
@@ -256,15 +254,11 @@ const fetchMarketData = async () => {
           iconColor: getIconColor(stock.rank),
           name: stock.stock_name,
           reason: stock.reason || '',
-          score,
-          scoreClass: getScoreClass(score),
           isEmpty: !stock.stock_code
         }
       })
 
       sellTop3.value = (decisions.sell_top3 || []).map(stock => {
-        // confidence_score가 NULL이면 0으로 도착 → 의미 없는 점수이므로 null 처리
-        const score = stock.score ? stock.score : null
         return {
           rank: stock.rank,
           icon: getStockIcon(stock.stock_name),
@@ -272,8 +266,6 @@ const fetchMarketData = async () => {
           iconColor: getIconColor(stock.rank),
           name: stock.stock_name,
           reason: stock.reason || '',
-          score,
-          scoreClass: getScoreClass(score),
           isEmpty: !stock.stock_code
         }
       })
@@ -305,14 +297,6 @@ const getIconBg = (rank) => {
 const getIconColor = (rank) => {
   const colors = ['#f87171', '#fbbf24', '#34d399']
   return colors[rank - 1] || 'var(--color-text-tertiary)'
-}
-
-const getScoreClass = (score) => {
-  if (!score) return 'empty'
-  if (score >= 0.8) return 'up'
-  if (score >= 0.6) return 'yw'
-  if (score >= 0.4) return 'nt'
-  return 'dn'
 }
 
 const toggleTop3 = (type) => {
@@ -520,11 +504,20 @@ const forecastChartPoints = computed(() => {
   ]
 })
 
+// 막대 스케일링: 실제 |값| 최대치를 분모로 사용 → 저변동성 날에도
+// 가장 큰 값이 (거의) 최대 높이로 표시된다. 전부 0이면 0 반환 (divide-by-zero 방지).
 const forecastChartMaxAbs = computed(() => {
   const points = forecastChartPoints.value
-  if (points.length === 0) return 1
-  return Math.max(1, ...points.map(p => Math.abs(p.value)))
+  if (points.length === 0) return 0
+  return Math.max(0, ...points.map(p => Math.abs(p.value)))
 })
+
+// 막대 높이(%) 계산: 분모가 0이면 0% (평평한 기준선). D+1은 항상 0이라 기준점.
+const forecastBarHeight = (value) => {
+  const max = forecastChartMaxAbs.value
+  if (max <= 0) return 0
+  return Math.min(100, (Math.abs(value) / max) * 100)
+}
 
 const trendDirectionClass = computed(() => {
   const dir = marketForecastTrend.value?.trend_direction
@@ -590,6 +583,26 @@ const displayInsights = computed(() => {
     topStock: heatmapInsights.value.topStock,
     source: 'client'
   }
+})
+
+// 감성 종목 분포 (중립 밴드 적용): |점수| < 0.05 → 중립.
+// 백엔드 summary는 >0/<0 단순 분류라 -0.012 같은 사실상 중립값을 전부 '부정'으로 집계해
+// "0/30"처럼 오해를 부른다. 히트맵 종목 데이터로 긍정/중립/부정을 직접 계산해 일관 표시.
+const SENTIMENT_NEUTRAL_BAND = 0.05
+const sentimentBreakdown = computed(() => {
+  const stocks = heatmapData.value.filter(
+    s => s.sentiment_score !== null && s.sentiment_score !== undefined
+  )
+  let positive = 0
+  let neutral = 0
+  let negative = 0
+  stocks.forEach(s => {
+    const v = Number(s.sentiment_score)
+    if (!Number.isFinite(v) || Math.abs(v) < SENTIMENT_NEUTRAL_BAND) neutral++
+    else if (v > 0) positive++
+    else negative++
+  })
+  return { positive, neutral, negative, total: stocks.length }
 })
 
 const hasHeatmapData = computed(() => heatmapData.value.length > 0)
@@ -768,17 +781,19 @@ onMounted(() => {
               </span>
             </div>
             <div
-              v-if="displayInsights.positiveSentimentCount !== null"
+              v-if="sentimentBreakdown.total > 0"
               class="insight-row"
             >
               <span class="insight-label">
-                긍정/부정 감성 종목
-                <span class="insight-sub">감성점수 &gt; 0 / &lt; 0 종목 수</span>
+                긍정/중립/부정 감성 종목
+                <span class="insight-sub">감성점수 ±0.05 기준 (그 외 중립)</span>
               </span>
               <span class="insight-value">
-                <span class="up">{{ displayInsights.positiveSentimentCount }}</span>
+                <span class="up">{{ sentimentBreakdown.positive }}</span>
                 /
-                <span class="dn">{{ displayInsights.negativeSentimentCount }}</span>
+                <span class="nt">{{ sentimentBreakdown.neutral }}</span>
+                /
+                <span class="dn">{{ sentimentBreakdown.negative }}</span>
               </span>
             </div>
             <div
@@ -842,9 +857,6 @@ onMounted(() => {
                 <div class="stock-name">{{ stock.name }}</div>
                 <div v-if="stock.reason" class="stock-reason">{{ stock.reason }}</div>
               </div>
-              <div :class="['stock-score', stock.scoreClass]">
-                {{ stock.score !== null && stock.score !== undefined ? stock.score : '—' }}
-              </div>
             </div>
           </div>
 
@@ -865,9 +877,6 @@ onMounted(() => {
               <div class="stock-info">
                 <div class="stock-name">{{ stock.name }}</div>
                 <div v-if="stock.reason" class="stock-reason">{{ stock.reason }}</div>
-              </div>
-              <div :class="['stock-score', stock.scoreClass]">
-                {{ stock.score !== null && stock.score !== undefined ? stock.score : '—' }}
               </div>
             </div>
           </div>
@@ -1059,13 +1068,16 @@ onMounted(() => {
                 class="trend-bar-col"
               >
                 <div class="trend-bar-wrap">
+                  <!-- 값이 0이면 기준선(D+1 baseline) → 얇은 틱으로 명확히 표시 -->
+                  <div v-if="point.value === 0" class="trend-bar-baseline"></div>
                   <div
-                    :class="['trend-bar', point.value >= 0 ? 'up' : 'dn']"
-                    :style="{ height: Math.min(100, Math.abs(point.value) / forecastChartMaxAbs * 100) + '%' }"
+                    v-else
+                    :class="['trend-bar', point.value > 0 ? 'up' : 'dn']"
+                    :style="{ height: forecastBarHeight(point.value) + '%' }"
                   ></div>
                 </div>
-                <div :class="['trend-bar-value', point.value > 0 ? 'up' : point.value < 0 ? 'dn' : '']">
-                  {{ point.value > 0 ? '+' : '' }}{{ point.value.toFixed(2) }}%
+                <div :class="['trend-bar-value', point.value > 0 ? 'up' : point.value < 0 ? 'dn' : 'base']">
+                  {{ point.value === 0 ? '기준' : (point.value > 0 ? '+' : '') + point.value.toFixed(2) + '%' }}
                 </div>
                 <div class="trend-bar-label">{{ point.day }}</div>
               </div>
@@ -1090,7 +1102,7 @@ onMounted(() => {
             <!-- 평균 지표 3개 -->
             <div class="financial-avg-grid">
               <div class="financial-avg-box">
-                <div class="financial-avg-label">평균 PER</div>
+                <div class="financial-avg-label">PER 중앙값</div>
                 <div class="financial-avg-value">{{ formatFinancial(financialHealth?.avg_per) }}</div>
                 <div class="financial-avg-sub">{{ financialHealth?.undervalued_count ?? 0 }}종목 저평가</div>
               </div>
@@ -1112,7 +1124,7 @@ onMounted(() => {
             <div class="excellent-row">
               <div class="excellent-info">
                 <div class="excellent-label">💎 펀더멘탈 우수 종목</div>
-                <div class="excellent-sub">PER &lt; 15 · ROE &gt; 15% · 영업이익률 &gt; 10%</div>
+                <div class="excellent-sub">PER &lt; 15 · ROE &gt; 15% · 영업이익률 &gt; 10% 중 2개 이상</div>
               </div>
               <div class="excellent-count">
                 {{ financialHealth?.excellent_count ?? 0 }}<span class="unit">종목</span>
@@ -1614,6 +1626,11 @@ onMounted(() => {
   color: #60a5fa;
 }
 
+/* 긍정/중립/부정 카운트 (insight-value 내부 중첩 span) */
+.insight-value .up { color: #f87171; }
+.insight-value .nt { color: #2dd4bf; }
+.insight-value .dn { color: #60a5fa; }
+
 .insight-value.highlight {
   color: var(--color-primary);
   font-size: 12px;
@@ -1750,20 +1767,6 @@ onMounted(() => {
   white-space: normal;
   word-break: break-word;
 }
-
-.stock-score {
-  font-size: 13px;
-  font-weight: var(--font-weight-bold);
-  flex-shrink: 0;
-  font-family: 'DM Mono', monospace;
-  padding-top: 1px;
-}
-
-.stock-score.up { color: #f87171; }
-.stock-score.dn { color: #60a5fa; }
-.stock-score.yw { color: #fbbf24; }
-.stock-score.nt { color: #2dd4bf; }
-.stock-score.empty { color: var(--color-text-tertiary); }
 
 /* Sentiment Block */
 .sentiment-block {
@@ -2475,13 +2478,19 @@ onMounted(() => {
 .trend-bar-wrap {
   width: 100%;
   flex: 1;
+  position: relative;
   display: flex;
   align-items: flex-end;
   justify-content: center;
+  height: 50px;
   min-height: 50px;
 }
 
 .trend-bar {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
   width: 70%;
   min-height: 4px;
   border-radius: 3px 3px 0 0;
@@ -2490,6 +2499,14 @@ onMounted(() => {
 
 .trend-bar.up { background: linear-gradient(180deg, #f87171, rgba(248, 113, 113, 0.5)); }
 .trend-bar.dn { background: linear-gradient(180deg, rgba(96, 165, 250, 0.5), #60a5fa); }
+
+/* D+1 기준선 (값 0) → 막대 대신 얇은 틱으로 표시 */
+.trend-bar-baseline {
+  width: 70%;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--color-border);
+}
 
 .trend-bar-value {
   font-size: 9px;
@@ -2500,6 +2517,7 @@ onMounted(() => {
 
 .trend-bar-value.up { color: #f87171; }
 .trend-bar-value.dn { color: #60a5fa; }
+.trend-bar-value.base { color: var(--color-text-tertiary); }
 
 .trend-bar-label {
   font-size: 9px;
