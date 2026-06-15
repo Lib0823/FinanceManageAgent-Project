@@ -22,6 +22,13 @@ const aiError = ref(false)
 const stockDetail = ref(null)
 const hasAnalysis = computed(() => !!stockDetail.value && stockDetail.value.has_analysis === true)
 
+// 헤더 아이콘: 종목명 첫 글자(없으면 코드 첫 글자, 그래도 없으면 '?') — 다른 화면(BotView)과 동일 스타일
+const logoChar = computed(() => {
+  const name = company.value?.name
+  const sym = company.value?.symbol
+  return (name?.charAt(0) || sym?.charAt(0) || '?').toUpperCase()
+})
+
 const toggleFavorite = () => {
   isFavorite.value = !isFavorite.value
 }
@@ -674,11 +681,7 @@ watch(
       <!-- Company Header -->
       <div class="company-header">
         <div class="company-logo">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-            <line x1="9" y1="9" x2="15" y2="9"/>
-            <line x1="9" y1="15" x2="15" y2="15"/>
-          </svg>
+          <span class="logo-char">{{ logoChar }}</span>
         </div>
         <div class="company-info">
           <span class="company-name">{{ company.name }}</span>
@@ -850,7 +853,6 @@ watch(
                     </g>
                   </svg>
                   <div v-else class="chart-empty">차트 데이터 없음</div>
-                  <div class="chart-badge">KIS 4개 + DART 3개 피처</div>
                 </div>
                 <div class="stat-row">
                   <div v-for="(stat, idx) in quantAnalysis.stats" :key="idx" class="stat-item">
@@ -1318,7 +1320,7 @@ watch(
   height: 56px;
   border-radius: var(--radius-lg);
   overflow: hidden;
-  background: linear-gradient(135deg, #1E293B 0%, #334155 100%);
+  background: linear-gradient(135deg, #10B981 0%, #059669 100%);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1326,8 +1328,11 @@ watch(
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.company-logo svg {
-  color: var(--color-text-tertiary);
+.logo-char {
+  color: white;
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  line-height: 1;
 }
 
 .company-info {
