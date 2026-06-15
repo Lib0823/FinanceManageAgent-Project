@@ -639,62 +639,107 @@ class KISClient:
         """
         Get minute-level price data for morning_return calculation (09:00-10:00).
 
-        API: FHKST01010600 (분봉 조회)
+        API: FHKST03010200 (주식당일분봉조회, inquire-time-itemchartprice)
+
+        TR 정정(morning_return=0 장애 대응):
+        과거 구현은 TR_ID 'FHKST01010600' 을 사용했는데, 이는 분봉이 아니라
+        "주식현재가 회원사"(inquire-member) 조회용 TR 이다. 그 응답에는 output2
+        (분봉 배열)가 존재하지 않아 항상 빈 DataFrame 을 반환했고, 결과적으로
+        morning_return 이 모든 종목·모든 날짜에서 0.0 으로 저장됐다.
+        본 엔드포인트(inquire-time-itemchartprice)의 정식 TR 은 'FHKST03010200'
+        이며, output2 에 분봉 배열을 반환한다.
+
+        창(window) 구성:
+        본 TR 은 FID_INPUT_HOUR_1 을 "조회 종료 시각"으로 해석하여 그 시각까지의
+        최근 ~30개 분봉만 반환한다(한 호출당 최대 30건). 따라서 09:00~10:00 전체
+        (60분)를 확보하려면 두 번 호출해 합친다:
+          - H=093000 → 09:01~09:30
+          - H=100000 → 09:31~10:00
+        가장 이른 분봉(≈09:01)의 stck_oprc 가 당일 시가(09:00 시가)에 해당한다.
+
+        한계(정직한 명시):
+        본 TR 은 FID_INPUT_DATE_1 을 무시하고 "가장 최근 거래일"의 분봉만 반환한다
+        (과거 임의 일자 분봉 조회 불가). 따라서 date 인자는 호환을 위해 받지만
+        실제로는 KIS 가 제공하는 최신 세션의 09:00~10:00 데이터가 반환된다.
 
         Args:
             stock_code: 6-digit stock code
-            date: Target date in YYYYMMDD format
+            date: Target date in YYYYMMDD format (KIS 가 무시; 최신 세션 반환)
 
         Returns:
-            DataFrame with columns:
+            DataFrame with columns (chronological order):
                 - time: 시각 (HHMMSS)
                 - open_price: 시가
                 - high_price: 고가
                 - low_price: 저가
                 - close_price: 종가
                 - volume: 거래량
+            빈 응답/오류 시 빈 DataFrame.
         """
         endpoint = '/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice'
-        tr_id = 'FHKST01010600'
+        tr_id = 'FHKST03010200'
 
-        params = {
-            'FID_COND_MRKT_DIV_CODE': 'J',
-            'FID_INPUT_ISCD': stock_code,
-            'FID_INPUT_DATE_1': date,
-            'FID_INPUT_HOUR_1': '090000',  # 09:00:00
-            'FID_PW_DATA_INCU_YN': 'Y'  # Include price data
-        }
+        async def _fetch_window(end_hour: str) -> List[Dict]:
+            """end_hour 까지의 최근 ~30개 분봉(raw output2 rows)을 반환."""
+            params = {
+                'FID_ETC_CLS_CODE': '',
+                'FID_COND_MRKT_DIV_CODE': 'J',
+                'FID_INPUT_ISCD': stock_code,
+                'FID_INPUT_HOUR_1': end_hour,  # 조회 종료 시각 (HHMMSS)
+                'FID_PW_DATA_INCU_YN': 'Y'  # 과거 데이터 포함
+            }
+            try:
+                result = await self.request('GET', endpoint, tr_id, params=params)
+            except RuntimeError as e:
+                logger.warning(f"Minute data fetch failed for {stock_code} (end={end_hour}): {e}")
+                return []
+            return result.get('output2', []) or []
 
-        result = await self.request('GET', endpoint, tr_id, params=params)
-        output_list = result.get('output2', [])  # Note: output2 for minute data
+        # 09:00~10:00 전체를 두 번의 호출로 확보 (각 ~30건, 종료시각 기준)
+        rows = await _fetch_window('093000')
+        rows += await _fetch_window('100000')
 
-        if not output_list:
-            logger.warning(f"No minute data for {stock_code} on {date}")
+        if not rows:
+            logger.warning(f"No minute data for {stock_code} (latest session)")
             return pd.DataFrame()
 
-        # Parse minute data
+        # 09:00~10:00 구간만, 시각별 중복 제거하며 파싱
+        seen_times = set()
         data = []
-        for item in output_list:
-            time_str = item['stck_cntg_hour']  # HHMMSS format
-
-            # Filter for 09:00-10:00 period
-            hour = int(time_str[:2])
-            if hour < 9 or hour >= 10:
+        for item in rows:
+            time_str = item.get('stck_cntg_hour')
+            if not time_str or len(time_str) < 4:
                 continue
 
-            data.append({
-                'time': time_str,
-                'open_price': int(item['stck_oprc']),
-                'high_price': int(item['stck_hgpr']),
-                'low_price': int(item['stck_lwpr']),
-                'close_price': int(item['stck_prpr']),
-                'volume': int(item['cntg_vol'])
-            })
+            # 09:00:00 ~ 10:00:00 윈도우 (10:00 포함)
+            hhmm = time_str[:4]
+            if hhmm < '0900' or hhmm > '1000':
+                continue
+            if time_str in seen_times:
+                continue
+            seen_times.add(time_str)
+
+            try:
+                data.append({
+                    'time': time_str,
+                    'open_price': int(item['stck_oprc']),
+                    'high_price': int(item['stck_hgpr']),
+                    'low_price': int(item['stck_lwpr']),
+                    'close_price': int(item['stck_prpr']),
+                    'volume': int(item.get('cntg_vol', 0) or 0)
+                })
+            except (ValueError, KeyError, TypeError) as parse_err:
+                logger.debug(f"Skipping malformed minute row for {stock_code}: {parse_err}")
+                continue
+
+        if not data:
+            logger.warning(f"No 09:00-10:00 minute rows assembled for {stock_code}")
+            return pd.DataFrame()
 
         df = pd.DataFrame(data)
         df = df.sort_values('time').reset_index(drop=True)  # Chronological order
 
-        logger.debug(f"Fetched {len(df)} minutes of data for {stock_code} on {date}")
+        logger.debug(f"Fetched {len(df)} minutes (09:00-10:00) for {stock_code}")
 
         return df
 
