@@ -32,7 +32,8 @@ const loadHistory = async () => {
   try {
     loading.value = true
     errorMessage.value = ''
-    const response = await tradingApi.getHistory()
+    // 거래내역(KIS 3개월 체결조회)은 시세보다 느려 전역 10s 로는 부족 → 25s.
+    const response = await tradingApi.getHistory({ timeout: 25000 })
 
     if (response.data) {
       // TradeHistory 엔티티를 UI 형식으로 변환
