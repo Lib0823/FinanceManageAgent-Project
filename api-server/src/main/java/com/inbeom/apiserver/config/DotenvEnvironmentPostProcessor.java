@@ -34,8 +34,8 @@ public class DotenvEnvironmentPostProcessor implements EnvironmentPostProcessor 
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
         try {
-            Path envPath = Paths.get(DEFAULT_ENV_FILE).toAbsolutePath();
-            if (!Files.isRegularFile(envPath) || !Files.isReadable(envPath)) {
+            Path envPath = resolveEnvFile();
+            if (envPath == null) {
                 return;
             }
 
@@ -55,6 +55,36 @@ public class DotenvEnvironmentPostProcessor implements EnvironmentPostProcessor 
             System.err.println("[dotenv] skipped .env loading: " + ex.getClass().getSimpleName()
                     + ": " + ex.getMessage());
         }
+    }
+
+    /**
+     * Locate the {@code .env} file regardless of the launch working directory (IntelliJ often runs
+     * from the repo root, gradlew/run-local.sh from the module dir). Tries, in order:
+     * an explicit {@code -Ddotenv.path=...} override, the working dir, the {@code api-server/}
+     * subdir, then walks up to 6 ancestor directories checking both {@code <dir>/.env} and
+     * {@code <dir>/api-server/.env}. Returns the first regular, readable file, or null.
+     */
+    private Path resolveEnvFile() {
+        String override = System.getProperty("dotenv.path");
+        if (override != null && !override.isBlank()) {
+            Path p = Paths.get(override);
+            return (Files.isRegularFile(p) && Files.isReadable(p)) ? p : null;
+        }
+
+        Path cwd = Paths.get("").toAbsolutePath();
+        Path dir = cwd;
+        for (int depth = 0; depth <= 6 && dir != null; depth++) {
+            Path direct = dir.resolve(DEFAULT_ENV_FILE);
+            if (Files.isRegularFile(direct) && Files.isReadable(direct)) {
+                return direct;
+            }
+            Path module = dir.resolve("api-server").resolve(DEFAULT_ENV_FILE);
+            if (Files.isRegularFile(module) && Files.isReadable(module)) {
+                return module;
+            }
+            dir = dir.getParent();
+        }
+        return null;
     }
 
     private Map<String, Object> parse(List<String> lines) {

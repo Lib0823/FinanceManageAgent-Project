@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
@@ -15,7 +16,18 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class KisApiClient {
 
-    private final RestTemplate restTemplate = new RestTemplate();
+    // KIS 응답이 느리거나 도달 불가일 때 호출이 수십 초(OS 기본) 매달리지 않도록 타임아웃 지정.
+    // 호출부는 예외를 잡아 graceful degrade(빈값/캐시 폴백) 하므로 빠른 실패가 바람직하다.
+    private final RestTemplate restTemplate = buildRestTemplate();
+
+    private static RestTemplate buildRestTemplate() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        // connect 는 짧게(도달 불가 빠른 실패), read 는 넉넉히: 거래내역(inquire-daily-ccld,
+        // 최근 3개월)은 시세보다 느려 7초로는 잘려 500 이 나므로 18초로 둔다. (OS 기본 ~75초 방지)
+        factory.setConnectTimeout(5000);
+        factory.setReadTimeout(18000);
+        return new RestTemplate(factory);
+    }
 
     @Value("${kis.base-url}")
     private String kisBaseUrl;

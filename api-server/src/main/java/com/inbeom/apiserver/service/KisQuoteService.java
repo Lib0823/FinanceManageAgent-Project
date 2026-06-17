@@ -4,6 +4,7 @@ import com.inbeom.apiserver.dto.kis.KisTokenResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
@@ -27,7 +28,16 @@ import java.util.concurrent.atomic.AtomicReference;
 @Service
 public class KisQuoteService {
 
-    private final RestTemplate restTemplate = new RestTemplate();
+    // 토큰 요청에 타임아웃을 둬서 KIS 가 느리거나 도달 불가일 때 요청이 수십 초 매달리지 않고
+    // 빠르게 실패(→ 호출부가 null 처리/캐시 폴백)하도록 한다.
+    private final RestTemplate restTemplate = buildRestTemplate();
+
+    private static RestTemplate buildRestTemplate() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(5000);
+        factory.setReadTimeout(8000);
+        return new RestTemplate(factory);
+    }
 
     @Value("${kis.quote-base-url:}")
     private String quoteBaseUrl;

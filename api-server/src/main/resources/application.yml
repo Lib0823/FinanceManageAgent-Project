@@ -120,11 +120,12 @@ cors:
 logging:
   level:
     root: INFO
-    com.inbeom.apiserver: DEBUG
-    org.springframework.web: DEBUG
-    org.springframework.security: DEBUG
-    org.hibernate.SQL: DEBUG
-    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+    com.inbeom.apiserver: INFO
+    # org.springframework.web 는 INFO 유지: DEBUG 면 RestTemplate 요청 본문(KIS appkey/appsecret)이
+    # 평문으로 로그에 남는 보안 문제가 있다. 디버깅 시에만 일시적으로 올릴 것.
+    org.springframework.web: INFO
+    org.springframework.security: INFO
+    org.hibernate.SQL: INFO
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
     file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
