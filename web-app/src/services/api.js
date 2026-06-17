@@ -130,7 +130,8 @@ export const assetApi = {
 export const tradingApi = {
   buy: (order) => api.post('/trading/buy', order),
   sell: (order) => api.post('/trading/sell', order),
-  getHistory: () => api.get('/trading/history'),
+  getHistory: (config) => api.get('/trading/history', config),
+  getRecentTrades: (config) => api.get('/trading/recent', config),
   getHoldings: () => api.get('/trading/holdings')
 }
 
@@ -162,10 +163,10 @@ export const newsApi = {
 
 // Market API (Handled by FastAPI ai-agent)
 export const marketApi = {
-  getIndices: () => api.get('/market/indices'),
+  getIndices: (config) => api.get('/market/indices', config),
   getExchangeRates: () => api.get('/market/exchange-rates'),
-  getTopNews: () => api.get('/market/top-news'),
-  getAiRecommendations: () => api.get('/market/ai-recommendations')
+  getTopNews: () => api.get('/market/news'),
+  getAiRecommendations: () => api.get('/market/decisions')
 }
 
 // AI Bot API (Handled by FastAPI ai-agent)

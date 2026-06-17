@@ -1,18 +1,22 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AppHeader from '@/components/common/AppHeader.vue'
-import { mockMarketIndices, mockExchangeRates, mockTopNews, mockAiRecommendations } from '@/services/mockData'
+import { tradingApi, marketApi } from '@/services/api'
+import { mockMarketIndices } from '@/services/mockData'
 
 const router = useRouter()
 
-const indices = ref(mockMarketIndices)
-const exchangeRates = ref(mockExchangeRates)
-const topNews = ref(mockTopNews)
-const aiRecommendations = ref(mockAiRecommendations)
+// Reactive state (loaded from API in onMounted)
+const indexCategories = ref([])
+const indicesLoading = ref(true)
+const exchangeRates = ref([])
+const exchangeLoading = ref(true)
+const topNews = ref([])
+const aiRecommendations = ref([])
+const notifications = ref([])
 
 const currentIndexSlide = ref(0)
-const indexCategories = ['domestic', 'overseas', 'coin']
 const scrollContainerRef = ref(null)
 
 const onScroll = () => {
@@ -21,7 +25,7 @@ const onScroll = () => {
   const scrollLeft = container.scrollLeft
   const itemWidth = container.offsetWidth * 0.85
   const newIndex = Math.round(scrollLeft / itemWidth)
-  if (newIndex !== currentIndexSlide.value && newIndex >= 0 && newIndex < indexCategories.length) {
+  if (newIndex !== currentIndexSlide.value && newIndex >= 0 && newIndex < indexCategories.value.length) {
     currentIndexSlide.value = newIndex
   }
 }
@@ -71,16 +75,6 @@ const getChartPoints = (history) => {
 
 // 알림 모달
 const showNotificationModal = ref(false)
-const notifications = ref([
-  { id: 1, type: 'trade', title: '테슬라 3주 예약 매도 체결', desc: '체결가 $248.50', time: '방금 전', read: false },
-  { id: 2, type: 'trade', title: '삼성전자 10주 매수 체결', desc: '체결가 71,500원', time: '5분 전', read: false },
-  { id: 3, type: 'ai', title: 'AI 매매 신호', desc: 'NVIDIA 매수 추천', time: '30분 전', read: true },
-  { id: 4, type: 'price', title: '목표가 도달', desc: '애플 $180 도달', time: '1시간 전', read: true },
-  { id: 5, type: 'news', title: '관심 종목 뉴스', desc: '삼성전자 실적 발표', time: '2시간 전', read: true },
-  { id: 6, type: 'trade', title: '카카오 5주 매수 체결', desc: '체결가 52,300원', time: '3시간 전', read: true },
-  { id: 7, type: 'ai', title: 'AI 리밸런싱 완료', desc: '포트폴리오 최적화', time: '4시간 전', read: true },
-  { id: 8, type: 'price', title: '급등 알림', desc: '네이버 +5.2%', time: '5시간 전', read: true }
-])
 
 const getNotificationIcon = (type) => {
   const icons = {
@@ -104,16 +98,33 @@ const getNotificationTypeName = (type) => {
 }
 
 const formatNumber = (num) => {
+  if (num === null || num === undefined || Number.isNaN(Number(num))) return '-'
   return new Intl.NumberFormat('ko-KR').format(num)
 }
 
 const formatChange = (change, percent) => {
-  const sign = change >= 0 ? '+' : ''
-  return `${sign}${change}(${sign}${percent}%)`
+  const c = Number(change) || 0
+  const p = Number(percent) || 0
+  const sign = c >= 0 ? '+' : ''
+  return `${sign}${c}(${sign}${p}%)`
+}
+
+// 지수 카드는 항상 2x2(4슬롯)로 렌더 — 데이터가 적거나 없으면 빈 슬롯을 채워
+// 레이아웃이 뭉개지지 않게 하고, 값이 null이면 화면에서 '-'로 표시된다.
+const indexSlots = (category) => {
+  const items = ((category && category.items) || []).slice(0, 4)
+  while (items.length < 4) {
+    items.push({ label: '-', value: null, change: null, change_percent: null })
+  }
+  return items
 }
 
 const goToNews = (news) => {
-  router.push(`/news/${news.id}`)
+  if (news.link) {
+    window.open(news.link, '_blank')
+  } else {
+    router.push(`/news/${news.id}`)
+  }
 }
 
 const goToCompany = (symbol) => {
@@ -122,6 +133,154 @@ const goToCompany = (symbol) => {
     query: { showAiAnalysis: 'true' }
   })
 }
+
+// ===== Data loading =====
+
+// Relative time helper for notifications
+const formatRelativeTime = (dateStr) => {
+  if (!dateStr) return ''
+  const date = new Date(dateStr)
+  if (Number.isNaN(date.getTime())) return ''
+  const diffMs = Date.now() - date.getTime()
+  const diffMin = Math.floor(diffMs / 60000)
+  if (diffMin < 1) return '방금 전'
+  if (diffMin < 60) return `${diffMin}분 전`
+  const diffHour = Math.floor(diffMin / 60)
+  if (diffHour < 24) return `${diffHour}시간 전`
+  return date.toLocaleDateString('ko-KR')
+}
+
+// 1. 알림 ← 거래 내역
+const loadNotifications = async () => {
+  try {
+    // 알림은 DB 거래내역(trade_history) 기반 — KIS 라이브가 아니라 빠르고 안정적(타임아웃/500 없음).
+    const res = await tradingApi.getRecentTrades()
+    const trades = (res && res.success && Array.isArray(res.data)) ? res.data : []
+    if (trades.length === 0) {
+      notifications.value = [{ id: 'empty', type: 'none', title: '최근 알림이 없습니다', desc: '', time: '', read: true }]
+      return
+    }
+    const sorted = [...trades].sort((a, b) => new Date(b.orderedAt) - new Date(a.orderedAt))
+    notifications.value = sorted.slice(0, 8).map((trade) => {
+      const side = (trade.orderType || '').toUpperCase() === 'SELL' ? '매도' : '매수'
+      const price = trade.executedPrice ?? trade.orderPrice
+      return {
+        id: trade.id,
+        type: 'trade',
+        title: `${trade.stockName} ${trade.quantity}주 ${side} 체결`,
+        desc: price != null ? `체결가 ${formatNumber(price)}원` : '',
+        time: formatRelativeTime(trade.orderedAt),
+        read: true
+      }
+    })
+  } catch (error) {
+    // 타임아웃/네트워크 실패는 치명적이지 않으므로 경고로만 남기고 빈 상태로 degrade.
+    if (error?.code === 'ECONNABORTED') {
+      console.warn('Notifications (trade history) timed out; showing empty state')
+    } else {
+      console.error('Failed to load notifications:', error)
+    }
+    notifications.value = [{ id: 'empty', type: 'none', title: '최근 알림이 없습니다', desc: '', time: '', read: true }]
+  }
+}
+
+// 2. 주요 지수 ← /market/indices (categories rendered dynamically)
+// mock 카테고리를 API 응답 형태(snake_case)로 정규화. 해외/코인은 KIS 실데이터를
+// 가져올 수 없어 기존 mock 으로 폴백한다.
+const mockIndexCategory = (key) => {
+  const m = mockMarketIndices[key]
+  if (!m) return null
+  return {
+    key,
+    label: m.label,
+    items: (m.items || []).map((i) => ({
+      label: i.label,
+      value: i.value,
+      change: i.change,
+      change_percent: i.changePercent
+    }))
+  }
+}
+
+const loadIndices = async () => {
+  // 국내: KIS 실데이터(가능 시), 해외/코인: 실데이터 미가용 → mock 폴백.
+  // 표시 순서: 국내 → 해외 → 코인.
+  const order = ['domestic', 'overseas', 'coin']
+  const fromApi = {}
+  try {
+    // 지수는 KIS 를 순차 호출하므로 전역 10s 보다 여유 있게.
+    const res = await marketApi.getIndices({ timeout: 20000 })
+    if (res && res.success && res.data && Array.isArray(res.data.categories)) {
+      for (const c of res.data.categories) {
+        if (c && c.key && Array.isArray(c.items) && c.items.length > 0) {
+          fromApi[c.key] = c
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Failed to load indices:', error)
+  }
+
+  indexCategories.value = order
+    .map((key) => fromApi[key] || mockIndexCategory(key))
+    .filter(Boolean)
+  indicesLoading.value = false
+}
+
+// 3. 환율 ← /market/exchange-rates
+const loadExchangeRates = async () => {
+  try {
+    const res = await marketApi.getExchangeRates()
+    exchangeRates.value = (res && res.success && Array.isArray(res.data)) ? res.data : []
+  } catch (error) {
+    console.error('Failed to load exchange rates:', error)
+    exchangeRates.value = []
+  } finally {
+    exchangeLoading.value = false
+  }
+}
+
+// 4. 속보 ← /market/news
+const loadTopNews = async () => {
+  try {
+    const res = await marketApi.getTopNews()
+    topNews.value = (res && res.success && Array.isArray(res.data)) ? res.data : []
+  } catch (error) {
+    console.error('Failed to load top news:', error)
+    topNews.value = []
+  }
+}
+
+// 5. AI 추천 ← /market/decisions (buy_top3)
+const loadAiRecommendations = async () => {
+  try {
+    const res = await marketApi.getAiRecommendations()
+    const buyTop3 = (res && res.success && res.data && Array.isArray(res.data.buy_top3)) ? res.data.buy_top3 : []
+    aiRecommendations.value = buyTop3
+      .filter((item) => item && item.stock_code)
+      .map((item) => ({
+        symbol: item.stock_code,
+        title: item.stock_name,
+        tag: 'AI 매수 추천',
+        description: item.reason,
+        logo: null
+      }))
+  } catch (error) {
+    console.error('Failed to load AI recommendations:', error)
+    aiRecommendations.value = []
+  }
+}
+
+onMounted(() => {
+  // Each section loads independently; one failure must not blank the others
+  Promise.allSettled([
+    loadNotifications(),
+    loadIndices(),
+    loadExchangeRates(),
+    loadTopNews(),
+    loadAiRecommendations()
+  ])
+})
 </script>
 
 <template>
@@ -177,7 +336,10 @@ const goToCompany = (symbol) => {
       <!-- Market Indices -->
       <section class="section">
         <h2 class="section-title">주요 지수</h2>
-        <div class="indices-swipe-container">
+        <div v-if="indicesLoading" class="loading-state">
+          <span class="loading-spinner"></span> 지수 불러오는 중...
+        </div>
+        <div v-else class="indices-swipe-container">
           <div class="swipe-fade left" :class="{ visible: currentIndexSlide > 0 }"></div>
           <div class="swipe-fade right" :class="{ visible: currentIndexSlide < indexCategories.length - 1 }"></div>
           <div
@@ -187,25 +349,28 @@ const goToCompany = (symbol) => {
           >
             <div
               v-for="category in indexCategories"
-              :key="category"
+              :key="category.key"
               class="indices-card"
             >
-              <!-- 상단 2개 지수 -->
+              <!-- 상단 2개 지수 (항상 2슬롯, 데이터 없으면 '-') -->
               <div class="indices-row">
-                <div class="index-item">
-                  <span class="index-label">{{ indices[category].items[0].label }}</span>
-                  <span class="index-value">{{ formatNumber(indices[category].items[0].value) }}</span>
-                  <span :class="['index-change', indices[category].items[0].change >= 0 ? 'positive' : 'negative']">
-                    {{ formatChange(indices[category].items[0].change, indices[category].items[0].changePercent) }}
-                  </span>
-                </div>
-                <div class="vertical-divider"></div>
-                <div class="index-item">
-                  <span class="index-label">{{ indices[category].items[1].label }}</span>
-                  <span class="index-value">{{ formatNumber(indices[category].items[1].value) }}</span>
-                  <span :class="['index-change', indices[category].items[1].change >= 0 ? 'positive' : 'negative']">
-                    {{ formatChange(indices[category].items[1].change, indices[category].items[1].changePercent) }}
-                  </span>
+                <div
+                  v-for="(item, i) in indexSlots(category).slice(0, 2)"
+                  :key="`top-${category.key}-${i}`"
+                  class="index-item-wrap"
+                >
+                  <div class="vertical-divider" v-if="i > 0"></div>
+                  <div class="index-item">
+                    <span class="index-label">{{ item.label || '-' }}</span>
+                    <span class="index-value">{{ formatNumber(item.value) }}</span>
+                    <span
+                      v-if="item.value != null"
+                      :class="['index-change', (item.change ?? 0) >= 0 ? 'positive' : 'negative']"
+                    >
+                      {{ formatChange(item.change, item.change_percent) }}
+                    </span>
+                    <span v-else class="index-change">-</span>
+                  </div>
                 </div>
               </div>
 
@@ -213,29 +378,35 @@ const goToCompany = (symbol) => {
               <div class="index-divider">
                 <div class="divider-line"></div>
                 <div class="index-tab">
-                  <span class="tab-text">{{ indices[category].label }}</span>
+                  <span class="tab-text">{{ category.label }}</span>
                 </div>
                 <div class="divider-line"></div>
               </div>
 
-              <!-- 하단 2개 지수 -->
+              <!-- 하단 2개 지수 (항상 2슬롯, 데이터 없으면 '-') -->
               <div class="indices-row">
-                <div class="index-item">
-                  <span class="index-label">{{ indices[category].items[2].label }}</span>
-                  <span class="index-value">{{ formatNumber(indices[category].items[2].value) }}</span>
-                  <span :class="['index-change', indices[category].items[2].change >= 0 ? 'positive' : 'negative']">
-                    {{ formatChange(indices[category].items[2].change, indices[category].items[2].changePercent) }}
-                  </span>
-                </div>
-                <div class="vertical-divider"></div>
-                <div class="index-item">
-                  <span class="index-label">{{ indices[category].items[3].label }}</span>
-                  <span class="index-value">{{ formatNumber(indices[category].items[3].value) }}</span>
-                  <span :class="['index-change', indices[category].items[3].change >= 0 ? 'positive' : 'negative']">
-                    {{ formatChange(indices[category].items[3].change, indices[category].items[3].changePercent) }}
-                  </span>
+                <div
+                  v-for="(item, i) in indexSlots(category).slice(2, 4)"
+                  :key="`bottom-${category.key}-${i}`"
+                  class="index-item-wrap"
+                >
+                  <div class="vertical-divider" v-if="i > 0"></div>
+                  <div class="index-item">
+                    <span class="index-label">{{ item.label || '-' }}</span>
+                    <span class="index-value">{{ formatNumber(item.value) }}</span>
+                    <span
+                      v-if="item.value != null"
+                      :class="['index-change', (item.change ?? 0) >= 0 ? 'positive' : 'negative']"
+                    >
+                      {{ formatChange(item.change, item.change_percent) }}
+                    </span>
+                    <span v-else class="index-change">-</span>
+                  </div>
                 </div>
               </div>
+            </div>
+            <div v-if="indexCategories.length === 0" class="empty-state">
+              지수 정보가 없습니다
             </div>
           </div>
           <!-- Slide indicators -->
@@ -253,7 +424,10 @@ const goToCompany = (symbol) => {
       <!-- Exchange Rates -->
       <section class="section">
         <h2 class="section-title">환율</h2>
-        <div class="exchange-swipe-container">
+        <div v-if="exchangeLoading" class="loading-state">
+          <span class="loading-spinner"></span> 환율 불러오는 중...
+        </div>
+        <div v-else class="exchange-swipe-container">
           <div class="swipe-fade left" :class="{ visible: currentExchangeSlide > 0 }"></div>
           <div class="swipe-fade right" :class="{ visible: currentExchangeSlide < exchangeRates.length - 1 }"></div>
           <div
@@ -273,8 +447,8 @@ const goToCompany = (symbol) => {
                 </div>
                 <div class="exchange-right">
                   <span class="rate-value">{{ formatNumber(rate.rate) }}원</span>
-                  <span :class="['rate-change', rate.change >= 0 ? 'positive' : 'negative']">
-                    {{ rate.change >= 0 ? '+' : '' }}{{ rate.change.toFixed(2) }} ({{ rate.change >= 0 ? '+' : '' }}{{ rate.changePercent.toFixed(2) }}%)
+                  <span :class="['rate-change', (rate.change ?? 0) >= 0 ? 'positive' : 'negative']">
+                    {{ (rate.change ?? 0) >= 0 ? '+' : '' }}{{ Number(rate.change ?? 0).toFixed(2) }} ({{ (rate.change_percent ?? 0) >= 0 ? '+' : '' }}{{ Number(rate.change_percent ?? 0).toFixed(2) }}%)
                   </span>
                 </div>
               </div>
@@ -283,13 +457,16 @@ const goToCompany = (symbol) => {
                   <polyline
                     :points="getChartPoints(rate.history)"
                     fill="none"
-                    :stroke="rate.change >= 0 ? '#10B981' : '#EF4444'"
+                    :stroke="(rate.change ?? 0) >= 0 ? '#10B981' : '#EF4444'"
                     stroke-width="2"
                     stroke-linecap="round"
                     stroke-linejoin="round"
                   />
                 </svg>
               </div>
+            </div>
+            <div v-if="exchangeRates.length === 0" class="empty-state">
+              환율 정보가 없습니다
             </div>
           </div>
           <div class="slide-indicators">
@@ -325,6 +502,9 @@ const goToCompany = (symbol) => {
               <span class="news-date">{{ news.date }}</span>
             </div>
           </div>
+          <div v-if="topNews.length === 0" class="news-empty">
+            속보가 없습니다
+          </div>
         </div>
       </section>
 
@@ -344,7 +524,7 @@ const goToCompany = (symbol) => {
                 <div class="ai-logo-container">
                   <div class="ai-logo">
                     <img v-if="item.logo" :src="item.logo" :alt="item.title" />
-                    <span v-else class="ai-logo-placeholder">{{ item.title.charAt(0) }}</span>
+                    <span v-else class="ai-logo-placeholder">{{ (item.title || '?').charAt(0) }}</span>
                   </div>
                 </div>
                 <div class="ai-title-wrap">
@@ -365,6 +545,9 @@ const goToCompany = (symbol) => {
                 </svg>
               </div>
             </div>
+          </div>
+          <div v-if="aiRecommendations.length === 0" class="ai-empty">
+            AI 추천 정보가 없습니다
           </div>
         </div>
       </section>
@@ -603,6 +786,13 @@ const goToCompany = (symbol) => {
   justify-content: space-around;
 }
 
+.index-item-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
 .index-item {
   flex: 1;
   display: flex;
@@ -612,6 +802,61 @@ const goToCompany = (symbol) => {
   gap: 0;
   padding: 4px 0;
   min-height: 48px;
+}
+
+.empty-state {
+  flex: 0 0 84%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-lg);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  background: var(--color-bg-highlight);
+  border-radius: var(--radius-lg);
+  scroll-snap-align: center;
+}
+
+.loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-sm);
+  min-height: 92px;
+  padding: var(--spacing-lg);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  background: var(--color-bg-highlight);
+  border-radius: var(--radius-lg);
+}
+
+.loading-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.news-empty,
+.ai-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-lg);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  background: linear-gradient(135deg, #1E293B 0%, #334155 100%);
+  border-radius: 12px;
+}
+
+.ai-empty {
+  grid-column: 1 / -1;
 }
 
 .vertical-divider {
