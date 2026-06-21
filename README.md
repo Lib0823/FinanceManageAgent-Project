@@ -2,145 +2,133 @@
 
 <img width="1465" height="883" alt="image" src="https://github.com/user-attachments/assets/457566be-1a0b-4d5b-a5cf-e4b1a4196221" />
 
-AI 기반 주식 자동매매 시스템. 매일 KOSPI 상위 100종목을 분석해 ML 스코어링으로 상위 30종목으로 추리고, 3-way 분석(정량 지표 · 감성 분석 · 시계열 예측)을 거쳐 Gemini AI가 매수/매도를 판단한 뒤 KIS 모의투자 API로 주문을 실행합니다.
+> **데이터 분석을 통한 LLM 기반 주식 자동매매 시스템**
+> 매 거래일 KOSPI 100 종목을 다축으로 분석해 11개 피처를 산출하고, 생성형 AI(Gemini)의 유연한 판단과 룰 기반 안전망의 안정성을 결합한 **이중 검증** 구조로 매수/매도를 결정해 KIS 모의투자 API로 자동 주문하는 시스템입니다.
 
-## 시스템 구성 (모노레포)
+---
+
+## 왜 만들었나 (Motivation)
+
+사람이 매일 반복하는 주식 분석·매매 루틴을, 감정을 배제한 **데이터 기반 자동 파이프라인**으로 옮기는 것이 목표입니다.
+
+| | AS-IS — 사람의 수동 매매 | TO-BE — 데이터 기반 자동 파이프라인 |
+|---|---|---|
+| 시간 | 점검 항목이 많아 시간 소모 | 사람 개입 없이 동일 루틴 반복 |
+| 범위 | 대상 종목 수가 곧 분석의 한계 | 대상을 좁히고 다축으로 동시 분석 |
+| 일관성 | 동일 상황에도 판단이 흔들림 | 감정 없이 일관된 기준으로 실행 |
+| 재현성 | 의사결정 근거를 재현하기 어려움 | 근거가 구조화된 매수/매도 후보 산출 |
+
+> 단일 지표보다 **여러 신호를 종합**할 때 투자 판단이 효율적이라는 선행연구(Lopez-Lira & Tang, 2023 · JP Morgan LOXM)에 근거해 "종합 판단" 구조를 채택했습니다.
+
+---
+
+## 시스템 한눈에 보기 (At a Glance)
+
+수집·분석·판단 / 매매 실행 / 표시 / 저장을 분리한 **4개 서비스**를 하나의 모노레포(Docker Compose)로 운영합니다.
 
 | 디렉터리 | 역할 | 기술 스택 | 포트 |
 |---------|------|----------|------|
-| `web-app/` | 프론트엔드 SPA (PWA) | Vue 3, Vite, Tailwind CSS | 5173 (dev) |
-| `api-server/` | 백엔드 API / 매매 실행 | Spring Boot 4.1, JPA, Spring Security | 7070 |
-| `ai-agent/` | ML 파이프라인 / 분석 / AI 판단 | Python, FastAPI, scikit-learn, Prophet, KR-FinBERT | 8000 |
-| `database/` | PostgreSQL 스키마 / ERD | PostgreSQL 16 | 5432 |
+| [`ai-agent/`](ai-agent/README.md) | 수집 · 3축 분석 · Gemini 판단 · 안전망 (파이프라인 코어) | Python, FastAPI, APScheduler, scikit-learn, Prophet, KR-FinBERT | 8000 |
+| [`api-server/`](api-server/README.md) | 인증 · 매매 실행(KIS) · 거래내역 · 시장분석 조회 API | Spring Boot 4.1, JPA, Spring Security + JWT, Jasypt, Liquibase | 7070 |
+| [`web-app/`](web-app/README.md) | 대시보드 · AI 분석 4탭 · 시각화 (PWA) | Vue 3, Vite, Tailwind CSS, Pinia | 5173 (dev) |
+| [`database/`](database/README.md) | 분석 결과 · 예측 · 판단 · 거래 이력 영속 저장 | PostgreSQL 16 (17 tables + 2 views) | 5432 |
 
-데이터 흐름과 일일 파이프라인 등 상세 아키텍처는 [`_docs/ARCHITECTURE.md`](_docs/ARCHITECTURE.md)를 참고하세요.
+```mermaid
+flowchart LR
+    KIS["KIS API"] & DART["DART API"] & NEWS["뉴스 RSS·네이버"] --> AI
+    AI["ai-agent :8000<br/>수집·분석·Gemini 판단·안전망"] -->|분석 결과 저장| DB[("PostgreSQL :5432")]
+    AI -.->|매매 실행 요청| API["api-server :7070<br/>인증·매매 실행·조회 API"]
+    AI --> GEM["Gemini API"]
+    API -->|주문·잔고·시세| KIS
+    API -->|JPA| DB
+    WEB["web-app :5173<br/>대시보드·AI 분석 화면"] -->|REST| API
+    USER([사용자]) --> WEB
+```
 
-### 문서 길찾기
+> ⏱ **매 거래일(평일) 08:50 KST** 분석 파이프라인이 자동 실행됩니다.
+> web-app은 ai-agent를 직접 호출하지 않으며, ai-agent가 DB에 적재한 분석 결과를 **api-server를 통해** 조회합니다.
+
+---
+
+## 분석 프로세스 (Analysis Pipeline)
+
+코스피 100 스캔부터 자동 주문까지 한 거래일의 전체 흐름입니다. 각 단계의 상세 설계·근거는 [`ai-agent/_docs/PIPELINE_DESIGN.md`](ai-agent/_docs/PIPELINE_DESIGN.md)에 있습니다.
+
+```mermaid
+flowchart TD
+    A["① TOP 30 필터링<br/>코스피 100 · 4지표 · StandardScaler · 가중합산"] --> B
+
+    subgraph B ["② 3축 분석 → 11개 피처"]
+        direction LR
+        B1["정량 7<br/>KIS 4 + DART 3"]
+        B2["감성 1<br/>KR-FinBERT"]
+        B3["시계열 3<br/>Prophet"]
+    end
+
+    B --> C["③ 생성형 AI 판단 (Gemini)<br/>11피처 + 보유여부 → 매수·매도 TOP3 (JSON)"]
+    C --> D{"④ 룰 기반 안전망 필터<br/>수급·감성·추세 조건 재검증"}
+    D -->|조건 충족| E["⑤ KIS 모의투자 자동 주문"]
+    D -->|조건 미충족| F["주문 보류 (당일 스킵)"]
+```
+
+### 단계별 요약
+
+| 단계 | 핵심 | 산출 |
+|------|------|------|
+| **① TOP 30 필터링** | 코스피 100 풀 고정 → 4개 지표(외국인·기관 순매수, 거래량 배율, 가격 변동성)를 StandardScaler로 매일 새로 정규화 → 가중합산(`|외국인|·0.3 + |기관|·0.3 + 거래량·0.3 + 변동성·0.1`) | 상위 30종목 (보유 종목 강제 포함) |
+| **② 정량분석 (KIS 4 + DART 3)** | KIS 시세·수급(`morning_return`, `close_position`, 외국인·기관 순매수) + DART 분기 재무(PER·ROE·영업이익률, 분기 1회 갱신·매일 DB 조회) | 7개 피처 |
+| **② 감성분석 (KR-FinBERT)** | 2트랙 분리 — 시장 전반(RSS 3개사 → 대시보드) / 종목별(네이버 금융 5건 → 시간 가중 평균). 제목+본문 200자, P(긍)−P(부) | `sentiment_score` 1개 |
+| **② 시계열 예측 (Prophet)** | 종목별 120거래일 독립 학습 → D+1~D+5 예측 → 선형회귀 기울기로 추세 방향·강도 수치화 | 가격 추세·거래량 추세·불확실성 3개 |
+| **③ AI 판단 (Gemini)** | "AI 트레이딩 어드바이저" 페르소나, 6가지 판단 기준(수급·모멘텀·펀더멘탈·뉴스·추세·불확실성), JSON 출력 강제 | 매수·매도 각 TOP3 + 근거 |
+| **④ 안전망 필터** | 수급·감성·추세 조건을 룰로 재검증해 Gemini 자유도를 제어. 미충족 시 자동 보류 | 실행/보류 결정 |
+| **⑤ 매매 실행** | `is_active=true`일 때 api-server를 통해 KIS 모의투자 주문 | 주문 체결 |
+
+> **이중 검증 구조**: 1차로 생성형 AI(Gemini)가 수치로 표현하기 어려운 맥락까지 유연하게 종합 판단하고, 2차로 룰 기반 안전망이 수급·감성·추세 조건을 다시 검증해 과도한 판단을 차단합니다. 리뷰어 LLM을 두는 방식 대비 비용은 낮고 신뢰성은 높습니다.
+
+---
+
+## 문서 길찾기 (Documentation Map)
+
+전체 문서의 진입점은 [`_docs/README.md`](_docs/README.md)입니다. 루트와 각 모듈의 `_docs/`는 **동일한 코어 구성**(`README` · `ARCHITECTURE` · `STATUS` · `USAGE`)을 따릅니다.
 
 | 목적 | 문서 |
 |------|------|
 | 전체 문서 지도 | [`_docs/README.md`](_docs/README.md) |
-| 시스템 아키텍처·데이터 흐름 | [`_docs/ARCHITECTURE.md`](_docs/ARCHITECTURE.md) |
-| 통합·연동 진행 상황 | [`MVP_INTEGRATION_STATUS.md`](MVP_INTEGRATION_STATUS.md) |
-| 화면/기능 단위 진행 현황 | [`_docs/mvp_progress.md`](_docs/mvp_progress.md) |
+| 시스템 아키텍처 · 데이터 흐름 | [`_docs/ARCHITECTURE.md`](_docs/ARCHITECTURE.md) |
+| 전체 개발 현황 | [`_docs/STATUS.md`](_docs/STATUS.md) |
+| 설치 · 실행 방법 | [`_docs/USAGE.md`](_docs/USAGE.md) |
 | 프론트엔드 상세 | [`web-app/_docs/README.md`](web-app/_docs/README.md) |
 | 백엔드 상세 | [`api-server/_docs/README.md`](api-server/_docs/README.md) |
 | AI 파이프라인 상세 | [`ai-agent/_docs/README.md`](ai-agent/_docs/README.md) |
 | DB 스키마 | [`database/README.md`](database/README.md) |
-| AI 작업 지침 | [`CLAUDE.md`](CLAUDE.md) |
+| AI(Claude Code) 작업 지침 | [`CLAUDE.md`](CLAUDE.md) |
 
 ---
 
-## 사전 요구사항
+## 빠른 시작 (Quick Start)
 
-| 도구 | 버전 |
-|------|------|
-| Java | 21 (LTS) |
-| Node.js | 20+ (LTS) |
-| Python | 3.11+ |
-| PostgreSQL | 16 |
-| Docker / Docker Compose | (선택, DB 구동용 권장) |
+```bash
+# 1. DB (PostgreSQL만 활성화되어 있음)
+docker-compose up -d
 
-> **macOS의 matplotlib 한글 폰트**: ai-agent의 차트 생성에 NanumGothic 폰트가 필요합니다. 미설치 시 차트의 한글이 깨질 수 있습니다 (분석 데이터 자체에는 영향 없음).
+# 2. api-server (:7070) — Liquibase가 스키마 자동 마이그레이션
+cd api-server && ./gradlew bootRun
+
+# 3. web-app (:5173)
+cd web-app && npm install && npm run dev
+
+# 4. ai-agent (:8000) — Prophet 때문에 venv 필수
+cd ai-agent && ./run_dev.sh
+```
+
+설치 요구사항 · 환경변수 · 외부 API 키 발급 · 트러블슈팅 등 **자세한 실행 방법은 [`_docs/USAGE.md`](_docs/USAGE.md)** 를 참고하세요.
 
 ---
 
-## 1. 데이터베이스 준비
+## 향후 확장 (Roadmap)
 
-Docker로 PostgreSQL을 띄우는 것이 가장 간단합니다 (현재 `docker-compose.yml`은 PostgreSQL만 활성화되어 있고, 나머지 서비스는 주석 처리되어 있습니다):
+- 실시간 공시 데이터 확장
+- 다변량 시계열 모델(LSTM) 도입
+- 멀티유저(per-user KIS 계정) 구조
 
-```bash
-docker-compose up -d        # PostgreSQL 16 기동 (DB: financemanage / user: admin / pw: admin1234)
-```
-
-스키마(17개 테이블 + 2개 뷰)는 다음 중 한 가지 방법으로 적용됩니다:
-- **api-server 실행 시 Liquibase가 자동 마이그레이션** (권장 — `api-server/src/main/resources/db/changelog/`)
-- 또는 수동 적용 참고용: [`database/schema.sql`](database/schema.sql) (테이블 목록은 [`database/README.md`](database/README.md))
-
-직접 PostgreSQL을 설치해 사용할 경우, `financemanage` 데이터베이스를 만들고 각 모듈의 `.env`에 접속 정보를 맞춰주세요.
-
----
-
-## 2. 환경 변수 설정
-
-각 모듈에 `.env.example`이 들어 있습니다. 복사 후 실제 키를 채워주세요. **실제 키 파일(`.env`)은 보안상 제출본에 포함되지 않습니다.**
-
-```bash
-cp ai-agent/.env.example   ai-agent/.env
-cp api-server/.env.example api-server/.env
-```
-
-필요한 외부 API 키와 발급처:
-
-| 키 | 용도 | 발급처 |
-|----|------|--------|
-| `KIS_APP_KEY` / `KIS_APP_SECRET` / `KIS_ACCOUNT_NUMBER` | KIS 모의투자 (주문/잔고) | https://apiportal.koreainvestment.com |
-| `KIS_QUOTE_APP_KEY` / `KIS_QUOTE_APP_SECRET` | KIS 시세/재무 조회 (api-server) | 위와 동일 |
-| `GEMINI_API_KEY` | AI 매매 판단 (무료 티어) | https://aistudio.google.com/apikey |
-| `DART_API_KEY` | 분기 재무 데이터 | https://opendart.fss.or.kr |
-
-> 키 없이도 빌드/기동은 되지만, 실제 시세 조회·매매·AI 판단은 동작하지 않습니다.
-
----
-
-## 3. 모듈별 실행
-
-세 모듈을 각각 별도 터미널에서 실행합니다.
-
-### api-server (Spring Boot)
-Gradle Wrapper가 포함되어 있어 별도 Gradle 설치가 필요 없습니다.
-
-```bash
-cd api-server
-./gradlew bootRun           # http://localhost:7070
-# 빌드만:  ./gradlew build   (산출물: build/libs/*.jar → java -jar 로 실행 가능)
-```
-
-### web-app (Vue 3)
-```bash
-cd web-app
-npm install
-npm run dev                 # http://localhost:5173
-# 프로덕션 빌드: npm run build (정적 산출물: dist/)
-```
-
-### ai-agent (FastAPI)
-```bash
-cd ai-agent
-./run_dev.sh                # venv 자동 생성 + 의존성 설치 + http://localhost:8000
-```
-
-수동으로 실행할 경우:
-```bash
-cd ai-agent
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
-```
-
-> ⚠️ **반드시 venv 안에서 실행하세요.** 시스템 python3로 직접 실행하면 Prophet 의존성이 깨져 시계열 예측 결과(`prophet_forecast`)가 NULL로 저장됩니다.
-
-ai-agent의 상세 사용법은 `ai-agent/README.md`, `ai-agent/USAGE.md`를 참고하세요.
-
----
-
-## 디렉터리 구조
-
-```
-FinanceManage_Agent/
-├── web-app/        # Vue 3 프론트엔드 (모듈 문서: web-app/_docs/)
-├── api-server/     # Spring Boot 백엔드 (Gradle Wrapper 포함, 모듈 문서: api-server/_docs/)
-├── ai-agent/       # FastAPI ML 파이프라인 (모듈 문서: ai-agent/_docs/)
-├── database/       # PostgreSQL 스키마 (schema.sql + README.md)
-├── _docs/          # 최상위 문서 (문서 지도 + 시스템 아키텍처 + 진행 현황)
-├── docker-compose.yml
-├── CLAUDE.md       # AI(Claude Code) 작업 지침
-├── MVP_INTEGRATION_STATUS.md  # 통합·연동 진행 상황
-└── README.md       # 이 문서 (사람용 온보딩)
-```
-
-## 참고
-
-- 본 시스템은 대학원 최종 프로젝트(MVP)로, 단일 사용자 / KIS 모의투자 / 무료 Gemini 티어를 전제로 합니다.
-- 전체 아키텍처와 일일 파이프라인 동작은 `CLAUDE.md`에 정리되어 있습니다.
+> 본 시스템은 대학원 최종 프로젝트로 시작했으며(단일 사용자 · KIS 모의투자 · 무료 Gemini 티어 전제), 현재 전체 기능 개발로 확장 중입니다. 진행 현황은 [`_docs/STATUS.md`](_docs/STATUS.md)를 참고하세요.

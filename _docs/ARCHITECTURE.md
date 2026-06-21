@@ -1,6 +1,6 @@
 # 시스템 아키텍처 (System Architecture)
 
-`FinanceManage_Agent` 모노레포 전체의 시스템 구조, 서비스 통신, 일일 파이프라인을 다룹니다. 모듈 내부 상세는 각 모듈의 `_docs/SYSTEM_ARCHITECTURE.md`를 참고하세요.
+`FinanceManage_Agent` 모노레포 전체의 시스템 구조, 서비스 통신, 일일 파이프라인을 다룹니다. 모듈 내부 상세는 각 모듈의 `_docs/ARCHITECTURE.md`를 참고하세요.
 
 ---
 
@@ -67,7 +67,9 @@ graph TD
 
 ## 3. 일일 파이프라인 (Daily Pipeline @ 평일 08:50 KST)
 
-ai-agent의 APScheduler가 평일 08:50에 트리거합니다. 상세는 [`ai-agent/_docs/PIPELINE_DESIGN.md`](../ai-agent/_docs/PIPELINE_DESIGN.md) 참고.
+ai-agent의 APScheduler가 평일 08:50에 트리거합니다. 상세·설계 근거는 [`ai-agent/_docs/PIPELINE_DESIGN.md`](../ai-agent/_docs/PIPELINE_DESIGN.md) 참고.
+
+> **스케줄 범위 주의**: 자동 스케줄(`run_stage1_sync`)은 **Stage 1 필터링만** 실행합니다. 전체 파이프라인(Stage 1~6, `run_complete_pipeline`)은 `POST /api/pipeline/trigger` 수동 트리거로 실행합니다. ([`ai-agent/_docs/STATUS.md`](../ai-agent/_docs/STATUS.md))
 
 ```mermaid
 flowchart TD
@@ -75,12 +77,11 @@ flowchart TD
     S1["Stage 1: 종목 필터링<br/>KOSPI 100 → StandardScaler 스코어 → Top 30<br/>(보유 종목 무조건 포함)"]
     S2["Stage 2: 데이터 수집<br/>KIS(asyncio 병렬, 5 req/s) + 뉴스(RSS·네이버) + DART"]
     S3["Stage 3: 3-Way 분석<br/>정량(7) · 감성(1, KR-FinBERT) · 시계열(3, Prophet)"]
-    S4["차트 생성<br/>matplotlib PNG 4종 → /static/charts/ (매일 덮어쓰기)"]
     S5["Stage 4: Gemini AI 판단<br/>11 피처 → 매수/매도 TOP3 + 이유 → ai_trade_decision"]
     S6["Stage 5: 안전망 필터<br/>임계값 기반 사후 검증 → safety_filter_result"]
     S7["Stage 6: 매매 실행<br/>is_active=true → Spring Boot → KIS 주문 → trade_execution_plan"]
 
-    S0 --> S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7
+    S0 --> S1 --> S2 --> S3 --> S5 --> S6 --> S7
 ```
 
 **스코어링 공식 (Stage 1):**
@@ -100,8 +101,7 @@ score = |foreign_net_buy|*0.3 + |institutional_net_buy|*0.3 + vol_avg_multiple*0
 | 감성 (1) | `sentiment_score` (-1.0 ~ 1.0) |
 | 시계열 (3) | `prophet_price_trend`, `prophet_volume_trend`, `prophet_price_uncertainty` |
 
-**생성 차트 (`/static/charts/`, 매일 덮어쓰기):**
-`heatmap_today.png`, `quant_features_today.png`, `sentiment_today.png`, `prophet_forecast_today.png`
+> **차트 생성(matplotlib PNG)은 현재 미구현**입니다. 발표 자료의 4탭 시각화는 web-app이 분석 결과(DB)를 받아 클라이언트에서 렌더하는 방향으로 진행 중입니다. ([`ai-agent/_docs/STATUS.md`](../ai-agent/_docs/STATUS.md))
 
 ---
 

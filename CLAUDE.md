@@ -10,9 +10,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 |------|------|
 | 전체 문서 지도 / 길찾기 | [`_docs/README.md`](_docs/README.md) |
 | 시스템 데이터 흐름·통신·파이프라인 다이어그램 | [`_docs/ARCHITECTURE.md`](_docs/ARCHITECTURE.md) |
-| 통합·연동 진행 상황 | [`MVP_INTEGRATION_STATUS.md`](MVP_INTEGRATION_STATUS.md) |
-| 화면/기능 단위 상세 진행 현황 | [`_docs/mvp_progress.md`](_docs/mvp_progress.md) |
-| 사람용 실행 방법 | [`README.md`](README.md) |
+| 전체 개발 현황 | [`_docs/STATUS.md`](_docs/STATUS.md) |
+| 설치·실행 방법 | [`_docs/USAGE.md`](_docs/USAGE.md) |
+| 프로젝트 소개 (사람용) | [`README.md`](README.md) |
 | **web-app** 모듈 문서 | [`web-app/_docs/README.md`](web-app/_docs/README.md) |
 | **api-server** 모듈 문서 | [`api-server/_docs/README.md`](api-server/_docs/README.md) |
 | **ai-agent** 모듈 문서 | [`ai-agent/_docs/README.md`](ai-agent/_docs/README.md) |
@@ -206,7 +206,7 @@ exception/    GlobalExceptionHandler, BusinessException, ErrorCode 등
 - **Schema**: Liquibase 가 source of truth — 스키마 변경은 직접 SQL 아닌 changelog 파일 수정
 - **환경변수**: `JWT_SECRET`(256bit 이상), `JASYPT_PASSWORD` 필수
 - **Indentation**: 4-space for Java files
-- **알려진 이슈**: 예외 체계 변경 후 일부 테스트가 stale 할 수 있음 (`MVP_INTEGRATION_STATUS.md` 참고)
+- **알려진 이슈**: 예외 체계 변경 후 일부 테스트가 stale 할 수 있음 ([`_docs/STATUS.md`](_docs/STATUS.md) 참고)
 
 ### AI Pipeline (ai-agent)
 - **venv 필수**: 시스템 python3 직접 실행 시 Prophet 깨짐 → `prophet_forecast` NULL
