@@ -28,7 +28,7 @@ services:
   #   build: ./api-server
   #   container_name: financemanage-api
   #   ports:
-  #     - "8080:8080"
+  #     - "7070:7070"   # app binds 7070 (application.yml server.port)
   #   depends_on:
   #     - postgres
   #   environment:

@@ -1,441 +1,103 @@
-# MVP 통합 완료 상태 보고서
+# MVP 통합 상태 (Integration Status Hub)
 
-## 📋 개요
+> 세 모듈(web-app · api-server · ai-agent)의 **통합·연동(integration) 관점** 진행 상황을 추적하는 허브 문서입니다. 화면/기능 단위 상세 진행은 [`_docs/mvp_progress.md`](_docs/mvp_progress.md), 모듈 내부 상태는 각 모듈 `_docs/`를 참고하세요.
 
-**작성일**: 2025-05-03
-**상태**: ✅ 모든 MVP 화면 API 연동 완료
-**빌드 상태**: ✅ BUILD SUCCESSFUL
+**최종 갱신**: 2026-06 (문서 정리 시점) · 이전 상세 스냅샷(2025-05-03)은 git 이력 참고
 
 ---
 
-## ✅ 완료된 작업
+## 1. 모듈 간 연동 매트릭스
 
-### 1. HIGH 우선순위 개선사항 반영 (완료)
+| 연동 구간 | 상태 | 비고 |
+|----------|------|------|
+| web-app → api-server (인증) | ✅ | 로그인/회원가입/토큰 갱신/로그아웃, 401 자동 리프레시 |
+| web-app → api-server (자산·거래내역·설정) | ✅ | 보유 종목, 거래내역, 거래 설정 연동 완료 |
+| web-app → api-server (시장 분석·종목 상세) | 🔄 | `MarketAnalysisController`/`CompanyController` 백엔드 존재, 화면 연동 진행 |
+| api-server → KIS API | ✅ | 주문/잔고/시세/체결내역 (모의투자) |
+| api-server → DART API | ✅ | 기업 재무·공시 (`CompanyController`) |
+| api-server ⇄ PostgreSQL | ✅ | Liquibase 스키마, JPA 연동 |
+| ai-agent ⇄ PostgreSQL | ✅ | 분석 결과·예측·판단·안전망 필터 적재 |
+| ai-agent → KIS / DART / News | ✅ | 분석용 원천 데이터 수집 |
+| ai-agent → Gemini API | ✅ | 11 피처 판단 |
+| ai-agent → api-server (매매 실행) | 🔄 | `is_active=true` 시 실행 경로, 통합 검증 진행 |
+| web-app(AI 분석 화면) ← ai-agent 결과 | 📅 | DB 적재분을 api-server 경유로 노출 예정 |
 
-#### 보안 강화
-- ✅ JWT Secret 환경변수화: `${JWT_SECRET}` (application.yml)
-- ✅ Jasypt 암호화 알고리즘 업그레이드: `PBEWITHHMACSHA512ANDAES_256`
-- ✅ Jasypt 비밀번호 환경변수화: `${JASYPT_PASSWORD}`
+> ai-agent가 DB에 쓴 분석 결과를 web-app이 **api-server를 통해 조회**하는 구조입니다(직접 호출 아님). 이 경로의 화면 연동이 남은 핵심 통합 작업입니다.
 
-#### 예외 처리 시스템
-- ✅ 커스텀 예외 클래스 생성:
-  - `BusinessException` (기본 비즈니스 예외)
-  - `UserNotFoundException` (사용자 미존재)
-  - `KisAccountNotFoundException` (KIS 계정 미존재)
-  - `KisApiException` (KIS API 오류)
-- ✅ `ErrorCode` Enum 생성 (표준화된 에러 코드)
-- ✅ `GlobalExceptionHandler` 구현 (@RestControllerAdvice)
-- ✅ 모든 Service 레이어 예외 처리 업데이트:
-  - `AuthService`: ✅ 완료
-  - `KisAuthService`: ✅ 완료
-  - `TradingService`: ✅ 완료
-
-#### CORS 설정
-- ✅ `CorsConfig` 생성 (Vue3 frontend 지원)
-- ✅ 허용 Origin: `http://localhost:5173`
-- ✅ 허용 헤더: `Authorization`, `Content-Type`
-
-### 2. Controller/Service 로직 점검 및 개선 (완료)
-
-#### 신규 API 추가
-- ✅ **UserController** 생성:
-  - `GET /users/trade-config`: 거래 설정 조회
-  - `PUT /users/trade-config`: 거래 설정 수정
-- ✅ **UserService** 구현:
-  - `getTradeConfig()`: 사용자 거래 설정 조회
-  - `updateTradeConfig()`: 거래 설정 업데이트
-- ✅ **DTO 생성**:
-  - `TradeConfigResponse`: 거래 설정 응답 DTO
-  - `UpdateTradeConfigRequest`: 거래 설정 수정 요청 DTO (with validation)
-
-#### 컨트롤러 코드 개선
-- ✅ `AuthController`: try-catch 블록 제거 (GlobalExceptionHandler 활용)
-- ✅ 일관된 `ApiResponse<T>` 응답 형식 사용
-
-### 3. 테스트 데이터 생성 (완료)
-
-#### Liquibase Changeset
-- ✅ `v1.4-test-data.yaml` 생성:
-  - **테스트 사용자**:
-    - username: `testuser`
-    - password: `password123` (BCrypt 암호화)
-    - email: `test@example.com`
-  - **KIS 계정**: Mock 계정 (테스트용)
-  - **거래 설정**:
-    - 주문 금액: 1,000,000원
-    - 최대 보유 종목수: 10개
-    - 주문 유형: 시장가
-    - 자동 거래: 비활성화
-  - **거래 내역** (4건):
-    - 삼성전자 매수 (COMPLETED)
-    - NAVER 매수 (COMPLETED)
-    - 카카오 매도 (COMPLETED)
-    - SK하이닉스 매수 (PENDING)
-
-### 4. 모든 MVP 화면 API 연동 (완료)
-
-#### ✅ LoginView (인증)
-- **API 연동**: `authApi.login()`
-- **기능**:
-  - 로그인 처리
-  - Access/Refresh 토큰 저장 (localStorage)
-  - 사용자 정보 저장
-  - 에러 처리 및 로딩 상태 표시
-- **위치**: `/Users/inbeom/IdeaProjects/FinanceManage_Agent-Project/web-app/src/views/auth/LoginView.vue`
-
-#### ✅ AssetDetailView (자산 현황)
-- **API 연동**:
-  - `assetApi.getHoldings()`: 보유 주식 조회
-  - `assetApi.getBalance()`: 잔고 조회
-- **기능**:
-  - KIS API 응답 파싱 (output1, output2)
-  - 보유 주식 목록 표시
-  - 주문 가능 금액/출금 가능 금액 표시
-  - 국내 주식 실시간 데이터 (해외 주식은 Mock)
-- **KIS API 필드 매핑**:
-  - `pdno` → 종목코드
-  - `prdt_name` → 종목명
-  - `prpr` → 현재가
-  - `hldg_qty` → 보유수량
-  - `pchs_avg_pric` → 평균매입가
-- **위치**: `/Users/inbeom/IdeaProjects/FinanceManage_Agent-Project/web-app/src/views/detail/AssetDetailView.vue`
-
-#### ✅ TransactionsView (거래 내역)
-- **API 연동**: `tradingApi.getHistory()`
-- **기능**:
-  - 전체 거래 내역 조회
-  - TradeHistory 엔티티 → UI 형식 변환
-  - 요약 통계 계산 (총 매수/매도 금액, 손익)
-  - 주문 상태별 필터링 (COMPLETED, PENDING)
-- **위치**: `/Users/inbeom/IdeaProjects/FinanceManage_Agent-Project/web-app/src/views/detail/TransactionsView.vue`
-
-#### ✅ TradingView (매매 주문)
-- **API 연동**:
-  - `tradingApi.buy()`: 매수 주문
-  - `tradingApi.sell()`: 매도 주문
-- **기능**:
-  - 실시간 매수/매도 주문 실행
-  - 주문 수량/가격 입력
-  - 주문 완료 후 거래 내역 화면으로 이동
-  - 에러 처리 및 알림
-- **위치**: `/Users/inbeom/IdeaProjects/FinanceManage_Agent-Project/web-app/src/views/detail/TradingView.vue`
-
-#### ✅ SettingsView (설정)
-- **API 연동**:
-  - `userApi.getTradeConfig()`: 거래 설정 조회
-  - `userApi.updateTradeConfig()`: 거래 설정 저장
-- **기능**:
-  - **거래 설정** (API 연동):
-    - 자동 거래 활성화/비활성화
-    - 주문 금액 설정
-    - 최대 보유 종목수 설정
-    - 주문 유형 선택 (시장가/지정가)
-  - **UI 설정** (localStorage):
-    - 다크 모드
-    - 자동 로그인
-    - 알림 설정 (주식/코인)
-    - 관심 자산 순위 (드래그 앤 드롭)
-- **위치**: `/Users/inbeom/IdeaProjects/FinanceManage_Agent-Project/web-app/src/views/settings/SettingsView.vue`
+범례: ✅ 완료 · 🔄 진행 중 · 📅 계획 · ⏸️ 대기 · ⚠️ 부분/임시
 
 ---
 
-## 🎯 API 엔드포인트 목록
+## 2. 모듈별 진행 상황 (요약 + 링크)
 
-### 인증 (AuthController)
-| Method | Endpoint | 설명 |
-|--------|----------|------|
-| POST | `/auth/login` | 로그인 |
-| POST | `/auth/register` | 회원가입 |
-| POST | `/auth/reset-password` | 비밀번호 재설정 |
-| GET | `/auth/check-username?username={username}` | 아이디 중복 확인 |
-| GET | `/auth/check-email?email={email}` | 이메일 중복 확인 |
-| POST | `/auth/refresh` | 토큰 갱신 |
+### web-app (Vue 3)
+인증·자산·거래내역·설정·봇(BotView) 화면 API 연동 완료. AI 분석 화면이 남은 작업.
+→ 상세: [`web-app/_docs/README.md`](web-app/_docs/README.md), 화면 단위: [`_docs/mvp_progress.md`](_docs/mvp_progress.md)
 
-### 자산 (AssetController)
-| Method | Endpoint | 설명 |
-|--------|----------|------|
-| GET | `/assets/holdings` | 보유 주식 조회 (KIS API) |
-| GET | `/assets/balance` | 잔고 조회 (KIS API) |
+### api-server (Spring Boot)
+인증(JWT + RefreshToken), 사용자/설정, 자산, 거래(KIS 직접 조회), 시장 분석/종목 상세 조회 API 구현. 예외 체계(`GlobalExceptionHandler`), CORS, Jasypt 암호화 적용.
+→ 상세: [`api-server/_docs/README.md`](api-server/_docs/README.md), 인증 흐름: [`api-server/_docs/AUTHENTICATION_FLOW.md`](api-server/_docs/AUTHENTICATION_FLOW.md)
 
-### 거래 (TradingController)
-| Method | Endpoint | 설명 |
-|--------|----------|------|
-| POST | `/trading/buy` | 매수 주문 (KIS API) |
-| POST | `/trading/sell` | 매도 주문 (KIS API) |
-| GET | `/trading/history` | 거래 내역 조회 |
-
-### 사용자 (UserController) ⭐ 신규
-| Method | Endpoint | 설명 |
-|--------|----------|------|
-| GET | `/users/trade-config` | 거래 설정 조회 |
-| PUT | `/users/trade-config` | 거래 설정 수정 |
+### ai-agent (FastAPI)
+6단계 파이프라인(휴장일 체크 → 필터링 → 3-way 분석 → Gemini 판단 → 안전망 필터 → 매매 실행) 구현. 분석 결과 DB 적재.
+→ 상세: [`ai-agent/_docs/README.md`](ai-agent/_docs/README.md), 시스템 구조: [`ai-agent/_docs/PIPELINE_DESIGN.md`](ai-agent/_docs/PIPELINE_DESIGN.md)
 
 ---
 
-## 🔧 기술 스택 & 아키텍처
+## 3. 주요 API 엔드포인트 (api-server)
 
-### Backend (api-server)
-- **Framework**: Spring Boot 4.1.0-SNAPSHOT
-- **Java**: 21 (LTS)
-- **Database**: PostgreSQL 16
-- **ORM**: Spring Data JPA
-- **Migration**: Liquibase (mvp context)
-- **Security**: Spring Security + JWT
-- **Encryption**: Jasypt (AES-256)
-- **Build**: Gradle
+| 그룹 | 엔드포인트 |
+|------|-----------|
+| 인증 (`/auth`) | `POST /login`, `POST /register`, `POST /reset-password`, `GET /check-username`, `GET /check-email`, `POST /refresh`, `POST /logout`, `POST /validate-kis-account` |
+| 사용자 (`/users`) | `GET/PUT /me`, `GET/PUT /settings`, `DELETE /me`, `GET/PUT /kis-account`, `GET/PUT /trade-config` |
+| 자산 (`/assets`) | `GET /holdings`, `GET /balance` |
+| 거래 (`/trading`) | `POST /buy`, `POST /sell`, `GET /history`, `GET /recent`, `GET /holdings` |
+| 시장 분석 (`/market`) | `GET /summary`, `GET /sentiment`, `GET /decisions`, `GET /latest-date`, `GET /heatmap`, `GET /stock-analysis/{code}`, `GET /stock-detail/{code}`, `GET /indices`, `GET /exchange-rates`, `GET /news` |
+| 기업 (`/company`) | `GET /{code}/basic-info`, `GET /{code}/financials`, `GET /{code}/disclosures` |
+| 헬스 (`/health`) | `GET`, `GET /db` |
 
-### Frontend (web-app)
-- **Framework**: Vue 3.5 (Composition API)
-- **Build Tool**: Vite 7.3
-- **Router**: Vue Router 4
-- **HTTP Client**: Axios
-- **UI Components**: Vant UI, Tailwind CSS 4.1
-- **State Management**: LocalStorage (auth, settings)
-
-### 통합 패턴
-```
-Vue3 App
-  ↓ (Axios)
-Spring Boot API (port 8080)
-  ↓ (JPA)
-PostgreSQL DB
-  ↓ (KIS API Client)
-한국투자증권 Open API
-```
+> 정확한 요청/응답 스펙은 [`api-server/_docs/API_DESIGN.md`](api-server/_docs/API_DESIGN.md) 참고.
 
 ---
 
-## 📊 데이터베이스 스키마
+## 4. 실행 (Quick Start)
 
-### 핵심 테이블 (8개)
-1. **users**: 사용자 정보
-2. **user_kis_account**: KIS API 계정 정보 (암호화)
-3. **user_trade_config**: 거래 설정
-4. **trade_history**: 거래 내역
-5. **stock_filter_score**: 종목 필터링 점수
-6. **stock_financial**: 재무 정보
-7. **news_analysis**: 뉴스 감성 분석
-8. **prophet_forecast**: 시계열 예측
-
-### ERD 문서
-- 위치: `/Users/inbeom/IdeaProjects/FinanceManage_Agent-Project/database/`
-- 파일: `database-erd.sql`, `database-erd-diagram.md`
-
----
-
-## ✅ 테스트 방법
-
-### 1. 데이터베이스 준비
 ```bash
-cd /Users/inbeom/IdeaProjects/FinanceManage_Agent-Project
-docker-compose up -d postgres
-```
+# 1. DB
+docker-compose up -d                 # PostgreSQL (financemanage / admin / admin1234)
 
-### 2. API 서버 실행
-```bash
+# 2. api-server
 cd api-server
+export JWT_SECRET="<256bit 이상 키>"
+export JASYPT_PASSWORD="<암호화 키>"
+./gradlew bootRun                    # http://localhost:7070 (Liquibase 자동 마이그레이션)
 
-# 환경 변수 설정 (필수)
-export JWT_SECRET="your-secret-key-min-256-bits-please-change-in-production"
-export JASYPT_PASSWORD="your-jasypt-encryption-key"
+# 3. web-app
+cd web-app && npm install && npm run dev   # http://localhost:5173
 
-# 실행
-./gradlew bootRun
+# 4. ai-agent (venv 필수)
+cd ai-agent && ./run_dev.sh          # http://localhost:8000
 ```
 
-서버 시작: http://localhost:8080
-
-### 3. 웹 앱 실행
-```bash
-cd web-app
-npm install
-npm run dev
-```
-
-웹 앱 시작: http://localhost:5173
-
-### 4. 테스트 시나리오
-
-#### ① 로그인 테스트
-1. http://localhost:5173/welcome 접속
-2. "로그인" 버튼 클릭
-3. 테스트 계정 입력:
-   - **아이디**: `testuser`
-   - **비밀번호**: `password123`
-4. 로그인 성공 → 홈 화면으로 이동
-
-#### ② 자산 조회 테스트
-1. 하단 네비게이션 "자산" 클릭
-2. 보유 주식 목록 확인 (KIS API 응답)
-3. 탭 전환하여 국내/해외 주식, 코인, 채권 확인
-
-#### ③ 거래 내역 조회 테스트
-1. 자산 상세 화면에서 "거래 내역" 버튼 클릭
-2. 테스트 데이터 4건 확인:
-   - 삼성전자 매수 (완료)
-   - NAVER 매수 (완료)
-   - 카카오 매도 (완료)
-   - SK하이닉스 매수 (대기중)
-
-#### ④ 매매 주문 테스트
-1. 종목 상세 화면에서 "매수/매도" 버튼 클릭
-2. 주문 정보 입력:
-   - 수량: 10주
-   - 가격: 71,500원
-3. "예약 매수 주문" 클릭
-4. 주문 완료 → 거래 내역에서 확인
-
-#### ⑤ 설정 변경 테스트
-1. 하단 네비게이션 "프로필" → "설정" 클릭
-2. 거래 설정 변경:
-   - 자동 거래: ON
-   - 주문 금액: 2,000,000원
-   - 최대 보유 종목수: 15개
-   - 주문 유형: 지정가
-3. "저장" 클릭
-4. 설정 저장 확인
+개발용 테스트 계정: `testuser` / `password123` (Liquibase `v1.4-test-data.yaml`)
 
 ---
 
-## ⚠️ 알려진 제약사항
+## 5. 알려진 제약 / 통합 잔여 작업
 
-### 1. 테스트 실패 (예상됨)
-- **원인**: 예외 처리 시스템 변경 (BusinessException 등) 후 테스트 코드 미업데이트
-- **영향**: 빌드는 성공하지만 `./gradlew test` 실행 시 11개 테스트 실패
-- **해결 방법**: 테스트 코드에서 예외 타입 변경 필요
-  - 예: `BadCredentialsException` → `KisAccountNotFoundException`
-  - 예: `IllegalArgumentException` → `BusinessException`
-
-### 2. KIS API 자격증명
-- **테스트 데이터**: Mock 자격증명 (실제 KIS API 호출 불가)
-- **실제 사용**: `user_kis_account` 테이블에 실제 KIS API 키 입력 필요
-  - `app_key`: KIS API 앱 키 (Jasypt 암호화)
-  - `app_secret`: KIS API 시크릿 (Jasypt 암호화)
-
-### 3. AI Agent 연동
-- **현재**: web-app에서 FastAPI ai-agent 엔드포인트는 Mock 데이터 사용
-- **HomeView**: 시장 분석 데이터는 ai-agent (port 8000) 에서 제공 예정
-- **BotView**: AI 분석 화면은 ai-agent API 연동 필요
+| 항목 | 상태 | 비고 |
+|------|------|------|
+| AI 분석 화면 연동 | 📅 | ai-agent DB 적재분을 api-server 경유로 web-app에 노출 |
+| ai-agent → api-server 매매 실행 e2e | 🔄 | `is_active=true` 경로 통합 검증 |
+| api-server 테스트 stale 가능성 | ⚠️ | 예외 체계 변경 후 일부 테스트 갱신 필요 |
+| KIS 실계정 연동 | ⏸️ | 현재 모의투자, `user_kis_accounts`에 실키 입력 시 동작 |
+| 멀티 유저 / 운영 배포 | 📅 | MVP 범위 밖 (`product` Liquibase context로 확장 예정) |
 
 ---
 
-## 📝 다음 단계
+## 6. 관련 문서
 
-### 즉시 가능
-1. ✅ 모든 MVP 화면 API 연동 완료
-2. ✅ 테스트 데이터로 기본 시나리오 테스트 가능
-3. ✅ Docker Compose로 로컬 환경 실행 가능
-
-### 개선 필요
-1. **테스트 코드 업데이트**:
-   - `AuthServiceTest.java` 예외 타입 변경
-   - 11개 실패 테스트 수정
-2. **KIS API 실계정 연동**:
-   - 실제 KIS API 자격증명 입력
-   - 실전 매매 테스트
-3. **AI Agent 연동**:
-   - FastAPI ai-agent 개발 완료 후 연동
-   - HomeView, BotView API 연동
-
-### 프로덕션 배포 전
-1. **환경 변수 관리**:
-   - `JWT_SECRET`: 256비트 이상 랜덤 키
-   - `JASYPT_PASSWORD`: 강력한 암호화 키
-   - `.env` 파일 생성 및 `.gitignore` 추가
-2. **보안 강화**:
-   - HTTPS 적용
-   - Rate Limiting
-   - Input Validation 강화
-3. **모니터링**:
-   - 로깅 시스템 구축
-   - 에러 추적 (Sentry 등)
-
----
-
-## 📂 중요 파일 위치
-
-### API Server
-```
-api-server/
-├── src/main/java/com/inbeom/apiserver/
-│   ├── controller/
-│   │   ├── AuthController.java
-│   │   ├── AssetController.java
-│   │   ├── TradingController.java
-│   │   └── UserController.java ⭐ 신규
-│   ├── service/
-│   │   ├── AuthService.java (예외 처리 업데이트)
-│   │   ├── KisAuthService.java (예외 처리 업데이트)
-│   │   ├── TradingService.java (예외 처리 업데이트)
-│   │   └── UserService.java ⭐ 신규
-│   ├── exception/ ⭐ 신규 패키지
-│   │   ├── BusinessException.java
-│   │   ├── UserNotFoundException.java
-│   │   ├── KisAccountNotFoundException.java
-│   │   ├── KisApiException.java
-│   │   ├── ErrorCode.java
-│   │   └── GlobalExceptionHandler.java
-│   ├── dto/
-│   │   └── user/ ⭐ 신규 패키지
-│   │       ├── TradeConfigResponse.java
-│   │       └── UpdateTradeConfigRequest.java
-│   └── config/
-│       ├── CorsConfig.java ⭐ 신규
-│       └── SecurityConfig.java (예외 핸들러 추가)
-└── src/main/resources/
-    ├── application.yml (환경변수화)
-    └── db/changelog/mvp/
-        └── v1.4-test-data.yaml ⭐ 신규
-```
-
-### Web App
-```
-web-app/
-└── src/
-    ├── services/
-    │   └── api.js (엔드포인트 정리)
-    └── views/
-        ├── auth/
-        │   └── LoginView.vue (API 연동 ✅)
-        ├── detail/
-        │   ├── AssetDetailView.vue (API 연동 ✅)
-        │   ├── TransactionsView.vue (API 연동 ✅)
-        │   └── TradingView.vue (API 연동 ✅)
-        └── settings/
-            └── SettingsView.vue (API 연동 ✅)
-```
-
----
-
-## 🎉 결론
-
-**모든 MVP 화면의 API 연동이 완료**되었으며, 테스트 데이터를 통해 **즉시 실행 가능한 상태**입니다.
-
-### 주요 성과
-- ✅ 5개 MVP 화면 완전 API 연동
-- ✅ 보안 강화 (JWT, Jasypt, Custom Exception)
-- ✅ 테스트 데이터 준비 (testuser/password123)
-- ✅ 일관된 API 응답 형식 (ApiResponse<T>)
-- ✅ 에러 처리 표준화 (GlobalExceptionHandler)
-- ✅ CORS 설정 완료
-- ✅ 빌드 성공 확인
-
-### 즉시 사용 가능
-```bash
-# 1. 데이터베이스 시작
-docker-compose up -d postgres
-
-# 2. API 서버 시작
-cd api-server
-export JWT_SECRET="your-secret-key"
-export JASYPT_PASSWORD="your-encryption-key"
-./gradlew bootRun
-
-# 3. 웹 앱 시작
-cd web-app
-npm run dev
-
-# 4. 로그인 (testuser / password123)
-```
-
-**MVP 기능이 정상적으로 동작하는 상태**입니다. 🚀
+- 전체 문서 지도: [`_docs/README.md`](_docs/README.md)
+- 시스템 아키텍처: [`_docs/ARCHITECTURE.md`](_docs/ARCHITECTURE.md)
+- 화면/기능 단위 진행: [`_docs/mvp_progress.md`](_docs/mvp_progress.md)
+- DB 스키마: [`database/README.md`](database/README.md)

@@ -2,6 +2,24 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Documentation Map (하네스 진입점)
+
+작업 전, 전체 문서 지도와 모듈별 문서 진입점은 **[`_docs/README.md`](_docs/README.md)** 에서 시작하세요.
+
+| 목적 | 문서 |
+|------|------|
+| 전체 문서 지도 / 길찾기 | [`_docs/README.md`](_docs/README.md) |
+| 시스템 데이터 흐름·통신·파이프라인 다이어그램 | [`_docs/ARCHITECTURE.md`](_docs/ARCHITECTURE.md) |
+| 통합·연동 진행 상황 | [`MVP_INTEGRATION_STATUS.md`](MVP_INTEGRATION_STATUS.md) |
+| 화면/기능 단위 상세 진행 현황 | [`_docs/mvp_progress.md`](_docs/mvp_progress.md) |
+| 사람용 실행 방법 | [`README.md`](README.md) |
+| **web-app** 모듈 문서 | [`web-app/_docs/README.md`](web-app/_docs/README.md) |
+| **api-server** 모듈 문서 | [`api-server/_docs/README.md`](api-server/_docs/README.md) |
+| **ai-agent** 모듈 문서 | [`ai-agent/_docs/README.md`](ai-agent/_docs/README.md) |
+| DB 스키마 | [`database/README.md`](database/README.md) · [`database/schema.sql`](database/schema.sql) |
+
+각 모듈 디렉터리에는 자체 `CLAUDE.md`도 있습니다(`ai-agent/CLAUDE.md` 등). 모듈 내부를 작업할 때는 해당 `CLAUDE.md`와 `_docs/README.md`를 먼저 읽으세요.
+
 ## Project Overview
 
 AI-powered stock auto-trading system that analyzes KOSPI top 100 stocks daily, filters to top 30 using ML scoring, performs 3-way analysis (quantitative features, sentiment analysis, time-series forecasting), and uses Gemini AI to execute buy/sell decisions via KIS mock trading API.
@@ -28,91 +46,117 @@ npm run format           # Format code with Prettier
 ### api-server (Spring Boot Backend)
 ```bash
 cd api-server
-./gradlew build          # Build project
+./gradlew bootRun        # Run development server (port 7070)
+./gradlew build          # Build project (build/libs/*.jar)
 ./gradlew test           # Run tests
-./gradlew bootRun        # Run development server (port 8080)
 ./gradlew clean          # Clean build artifacts
 ```
+> Requires `JWT_SECRET` and `JASYPT_PASSWORD` environment variables (see `.env.example`). Liquibase auto-migrates the schema on startup.
+
+### ai-agent (FastAPI)
+```bash
+cd ai-agent
+./run_dev.sh             # venv 자동 생성 + 의존성 설치 + http://localhost:8000
+```
+> **반드시 venv 안에서 실행.** 시스템 python3로 직접 실행하면 Prophet이 깨져 `prophet_forecast`가 NULL로 저장됨.
 
 ### Full System (Docker Compose)
 ```bash
-docker-compose up -d     # Start all services
-docker-compose down      # Stop all services
-docker-compose logs -f   # View logs
+docker-compose up -d     # 현재는 PostgreSQL만 활성화 (나머지 서비스는 주석 처리됨)
+docker-compose down
+docker-compose logs -f
 ```
 
-**Container Services:**
+**Container Services (compose에 정의된 전체 — 현재 postgres만 활성):**
 - `web-app` → Nginx (port 3000)
-- `api-server` → Spring Boot (port 8080)
+- `api-server` → Spring Boot (port 7070)
 - `ai-agent` → FastAPI (port 8000)
-- `postgres` → PostgreSQL (port 5432)
+- `postgres` → PostgreSQL (port 5432) ← 현재 활성
 - `elasticsearch` → Elasticsearch (port 9200)
 
 ## Architecture & Data Flow
 
+전체 다이어그램은 [`_docs/ARCHITECTURE.md`](_docs/ARCHITECTURE.md) 참고.
+
 ### Service Communication Pattern
 ```
-Vue3 → Spring Boot (8080)     : Dashboard, trade history, settings, auth
-Vue3 → FastAPI (8000)          : AI analysis results, matplotlib charts
-FastAPI → Spring Boot          : POST trading requests, GET holdings
-FastAPI → KIS API              : Real-time stock data, order execution
-FastAPI → DART API             : Quarterly financial data
-FastAPI ⇄ PostgreSQL           : Analysis results, predictions, AI decisions
-Spring Boot ⇄ PostgreSQL       : Trade history, user settings
+Vue3 → Spring Boot (7070)     : 인증, 대시보드, 자산, 거래내역, 설정, 시장 분석, 종목 상세
+Spring Boot → KIS API          : 주문 실행, 잔고/시세 조회
+Spring Boot → DART API         : 기업 재무·공시 조회
+Spring Boot ⇄ PostgreSQL       : 사용자/인증/설정/거래 이력 + AI 분석 결과 조회
+ai-agent → KIS / DART / News   : 분석용 원천 데이터 수집
+ai-agent → Gemini API          : 11개 피처 기반 매수/매도 판단
+ai-agent ⇄ PostgreSQL          : 분석 결과, 예측, AI 판단, 안전망 필터 저장
+ai-agent → Spring Boot         : is_active=true일 때 매매 실행 요청
 ```
+> web-app은 ai-agent를 직접 호출하지 않습니다. ai-agent가 DB에 쓴 분석 결과를 Spring Boot의 `MarketAnalysisController`/`MarketDataController`/`CompanyController`가 중계합니다.
 
-### Daily Pipeline Flow (APScheduler @ 08:50 KST)
-1. **Stock Filtering**: KOSPI 100 → StandardScaler scoring → Top 30 stocks
+### Daily Pipeline Flow (APScheduler @ 평일 08:50 KST)
+1. **Stage 0 — 휴장일 체크**: 주말·공휴일이면 중단
+2. **Stage 1 — Stock Filtering**: KOSPI 100 → StandardScaler scoring → Top 30
    - `score = abs(foreign_net_buy)*0.3 + abs(institutional_net_buy)*0.3 + vol_avg_multiple*0.3 + price_volatility*0.1`
-   - Holdings always included in final 30
-2. **Data Collection**: KIS API (asyncio parallel), news crawling (RSS + Naver)
-3. **3-Way Analysis**:
+   - StandardScaler는 매일 당일 100종목 기준으로 새로 fit, 보유 종목은 final 30에 강제 포함
+3. **Stage 2 — Data Collection**: KIS API (asyncio 병렬, 5 req/sec), 뉴스(RSS + 네이버), DART 재무
+4. **Stage 3 — 3-Way Analysis**:
    - **Quantitative**: 4 KIS features + 3 DART financials
-   - **Sentiment**: KR-FinBERT on market news (track 1) + stock-specific news (track 2)
+   - **Sentiment**: KR-FinBERT (track 1: 시장 뉴스, track 2: 종목 뉴스)
    - **Time-Series**: Prophet 120-day forecasting → D+1~D+5 trends
-4. **Chart Generation**: 4 matplotlib PNGs → `/static/charts/` (overwritten daily)
-5. **AI Decision**: Gemini API judges 11 features → Buy/Sell TOP3 with reasons
-6. **Trade Execution**: If `is_active=true`, POST to Spring Boot → KIS order execution
+5. **Chart Generation**: 4 matplotlib PNGs → `/static/charts/` (매일 덮어쓰기)
+6. **Stage 4 — AI Decision**: Gemini API가 11 피처 판단 → Buy/Sell TOP3 → `ai_trade_decision`
+7. **Stage 5 — Safety Filter**: 임계값 기반 사후 검증 → `safety_filter_result`
+8. **Stage 6 — Trade Execution**: `is_active=true`면 POST to Spring Boot → KIS 주문 → `trade_execution_plan`
 
 ### Frontend Architecture (Vue3)
 - **Router**: Vue Router 4 with lazy-loaded views
-- **State**: LocalStorage for auth tokens
-- **API Layer**: Axios with request/response interceptors (web-app/src/services/api.js)
-- **Styling**: Tailwind CSS 4.1 + custom components
+- **State**: Pinia (`stores/auth.js` 등) + LocalStorage (토큰/UI 설정)
+- **API Layer**: Axios with request/response interceptors, 401 시 RefreshToken 자동 갱신 (`web-app/src/services/api.js`)
+- **Styling**: Tailwind CSS 4.1 + Vant UI
 - **Build**: Vite 7.3 with PWA plugin
 - **Auth Guard**: Dev mode skips auth, production checks localStorage token
 
+상세 화면·라우팅은 [`web-app/_docs/README.md`](web-app/_docs/README.md) 참고.
+
 **Key Routes:**
-- `/` → Splash screen
-- `/home` → Dashboard with holdings summary
-- `/assets` → Asset breakdown (stocks/bonds/coins/cash)
-- `/bot` → AI bot analysis and control
-- `/search` → Stock search
-- `/news` → Market news feed
-- `/profile`, `/settings` → User management
+- `/` → Splash · `/home` → 대시보드 · `/assets` → 자산 · `/bot` → AI 봇 · `/search` → 검색 · `/news` → 뉴스 · `/profile`, `/settings` → 사용자 관리
 
 ### Backend Architecture (Spring Boot)
-- **Java Version**: 21 (LTS)
+- **Java**: 21 (LTS, toolchain)
 - **Framework**: Spring Boot 4.1.0-SNAPSHOT
 - **ORM**: Spring Data JPA
-- **Database**: PostgreSQL
-- **Security**: Spring Security (admin-only MVP, no JWT yet)
-- **Build**: Gradle
-- **Testing**: JUnit 5 + Mockito
+- **Database**: PostgreSQL, **schema managed by Liquibase** (`src/main/resources/db/changelog/`)
+- **Security**: Spring Security + **JWT 완비** (Access + RefreshToken). `io.jsonwebtoken:jjwt 0.12.3`
+- **Encryption**: Jasypt (`PBEWITHHMACSHA512ANDAES_256`) — KIS 키 암호화 저장
+- **Build**: Gradle · **Testing**: JUnit 5 + Mockito
 
-**Package Structure:**
+**Package Structure (`com.inbeom.apiserver`):**
 ```
-com.inbeom.apiserver/
-  └── ApiServerApplication.java  # Main entry point
+controller/   AuthController, AssetController, TradingController, UserController,
+              MarketAnalysisController, MarketDataController, CompanyController,
+              HealthController, TestController
+service/      AuthService, UserService, TradingService, KisAuthService 등
+domain/       User, RefreshToken, UserKisAccount, UserTradeConfig, UserSettings, TradeHistory
+repository/   Spring Data JPA repositories
+dto/          auth, trade, kis, user, common, market, company 하위 패키지
+client/       KIS / DART 외부 API 클라이언트
+config/       SecurityConfig, CorsConfig 등
+security/     JwtAuthenticationFilter, CustomUserDetails, CustomUserDetailsService
+util/         JwtTokenProvider
+exception/    GlobalExceptionHandler, BusinessException, ErrorCode 등
 ```
+> CLAUDE.md 이전 버전은 "ApiServerApplication.java 단일 파일" / "no JWT yet"로 적혀 있었으나, 실제로는 위와 같이 다층 구조이며 JWT/RefreshToken이 완비되어 있습니다.
+
+상세 API/인증 흐름은 [`api-server/_docs/README.md`](api-server/_docs/README.md), [`api-server/_docs/AUTHENTICATION_FLOW.md`](api-server/_docs/AUTHENTICATION_FLOW.md) 참고.
 
 ### AI Pipeline Architecture (FastAPI)
-- **Scheduler**: APScheduler with cron expression (weekdays 08:50)
+- **Scheduler**: APScheduler (평일 08:50 KST)
+- **구조**: `pipeline/`(orchestrator, scheduler), `analysis/`(filter, quantitative, sentiment, timeseries), `collectors/`, `models/`, `ai/`, `filters/`(safety_filter), `execution/`(trade_executor), `database/`
 - **ML Stack**: pandas, NumPy, scikit-learn (StandardScaler), Prophet
-- **NLP**: transformers (KR-FinBERT for sentiment analysis)
-- **Charts**: matplotlib + NanumGothic font (required in server environment)
-- **AI**: Gemini API (free tier, 1 call/day)
+- **NLP**: transformers (KR-FinBERT)
+- **Charts**: matplotlib + NanumGothic font
+- **AI**: Gemini API (무료 티어, 1 call/day)
 - **Async**: asyncio for parallel KIS API calls (rate limit: 5 req/sec)
+
+상세 6단계 플로우는 [`ai-agent/_docs/PIPELINE_DESIGN.md`](ai-agent/_docs/PIPELINE_DESIGN.md), 모듈 지침은 [`ai-agent/CLAUDE.md`](ai-agent/CLAUDE.md) 참고.
 
 **Chart Files (Static Serving):**
 - `heatmap_today.png` → 11 features × 30 stocks heatmap
@@ -122,68 +166,68 @@ com.inbeom.apiserver/
 
 ## Database Schema
 
-**Key Tables (8 total):**
-- `users` — Admin account (single user MVP)
-- `user_trade_config` — Investment settings (`is_active` flag for auto-trading)
-- `stock_filter_score` — Daily KOSPI 100 scoring results
-- `stock_financial` — DART quarterly financials (PER, ROE, operating margin)
-- `news_analysis` — KR-FinBERT sentiment scores (market + stock-specific)
-- `prophet_forecast` — D+1~D+5 price/volume trends, uncertainty
-- `ai_trade_decision` — Gemini buy/sell TOP3 decisions with reasoning
-- `trade_history` — KIS order execution history
+**실제 테이블: 17개 + 뷰 2개** (Liquibase가 8개 changelog로 생성). 전체 목록·관계는 [`database/README.md`](database/README.md), DDL은 [`database/schema.sql`](database/schema.sql).
 
-See `database/database-erd.sql` for full schema and `database/database-erd-diagram.md` for ERD visualization.
+| 그룹 | 테이블 |
+|------|--------|
+| 사용자 & 인증 | `users`, `refresh_tokens`, `user_kis_accounts`, `user_trade_config`, `user_settings` |
+| 분석 데이터 | `stock_filter_score`, `stock_financial`, `news_analysis`, `prophet_forecast`, `ai_trade_decision`, `safety_filter_result` |
+| 웹 표시용 | `market_daily_summary`, `stock_realtime_price`, `user_holdings` |
+| 매매 실행 | `trade_execution_plan`, `feature_threshold_config`, `trade_history` |
+| 뷰 | `v_latest_trade_plan`, `v_decision_with_filter` |
+
+> 이전 CLAUDE.md는 "8개 테이블"과 `database-erd.sql`/`database-erd-diagram.md`를 참조했으나, 실제 파일은 `database/schema.sql`이며 테이블은 17개입니다.
 
 ## Technology Stack Summary
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | Vue 3.5 (Composition API), Vite 7.3, Vue Router 4, Tailwind CSS 4.1, Chart.js, Vant UI, PWA |
-| Backend API | Spring Boot 4.1, Spring Data JPA, Spring Security, PostgreSQL, Gradle |
+| Frontend | Vue 3.5 (Composition API), Vite 7.3, Vue Router 4, Pinia, Tailwind CSS 4.1, Chart.js, Vant UI, PWA |
+| Backend API | Spring Boot 4.1, Java 21, Spring Data JPA, Spring Security + JWT(jjwt 0.12.3), Jasypt, Liquibase, PostgreSQL, Gradle |
 | AI Pipeline | Python 3.11+, FastAPI, APScheduler, pandas, NumPy, scikit-learn, Prophet, transformers (KR-FinBERT), matplotlib |
 | AI Model | Gemini API (free tier) |
-| Database | PostgreSQL 16 |
-| Search | Elasticsearch 8.x |
+| Database | PostgreSQL 16 (17 tables + 2 views) |
+| Search | Elasticsearch 8.x (확장 예정) |
 | Infra | Docker, Docker Compose |
 | External APIs | KIS Developers (mock trading), DART (financial data) |
 
 ## Important Development Notes
 
 ### Frontend (web-app)
-- **API Base URL**: Configured via `VITE_API_BASE_URL` environment variable, defaults to `http://localhost:8080/api`
-- **Auth**: Dev mode (`import.meta.env.DEV`) skips authentication checks
-- **PWA**: App is installable, configured in vite.config.js with service worker
-- **Navigation**: Bottom nav shown via `meta.showBottomNav` in route config
+- **API Base URL**: `VITE_API_BASE_URL` 환경변수, 기본값 `http://localhost:7070/api`
+- **Auth**: Dev mode (`import.meta.env.DEV`) skips auth checks; 401 시 RefreshToken으로 자동 갱신
+- **PWA**: installable, service worker configured in vite.config.js
+- **Navigation**: bottom nav via `meta.showBottomNav` in route config
 - **Styling**: 2-space indentation, single quotes for JS strings
 
 ### Backend (api-server)
-- **Java 21 Required**: Uses toolchain configuration in build.gradle
-- **Lombok**: Used for boilerplate reduction (getters/setters/constructors)
-- **Database**: PostgreSQL runtime dependency, JPA for ORM
-- **Testing**: JUnit Platform Launcher for test execution
+- **Java 21 Required** (toolchain in build.gradle)
+- **Lombok**: getters/setters/constructors
+- **Schema**: Liquibase 가 source of truth — 스키마 변경은 직접 SQL 아닌 changelog 파일 수정
+- **환경변수**: `JWT_SECRET`(256bit 이상), `JASYPT_PASSWORD` 필수
 - **Indentation**: 4-space for Java files
+- **알려진 이슈**: 예외 체계 변경 후 일부 테스트가 stale 할 수 있음 (`MVP_INTEGRATION_STATUS.md` 참고)
 
 ### AI Pipeline (ai-agent)
-- **Font Dependency**: NanumGothic must be installed in container for matplotlib Korean text rendering
-- **Rate Limiting**: KIS API limited to 5 requests/second, handled via asyncio delays
-- **Scheduling**: APScheduler configured programmatically (no external cron), weekday 08:50 KST only
-- **Data Flow**: Always includes holdings in final 30 stocks to enable sell analysis
-- **Chart Overwriting**: Daily charts overwrite previous day's files (no versioning)
+- **venv 필수**: 시스템 python3 직접 실행 시 Prophet 깨짐 → `prophet_forecast` NULL
+- **Font Dependency**: NanumGothic 설치 필요 (matplotlib 한글 렌더링)
+- **Rate Limiting**: KIS API 5 req/sec, asyncio.Semaphore(5) + 0.2s 간격
+- **Scheduling**: APScheduler (프로그램 내 설정, 평일 08:50 KST)
+- **Data Flow**: 보유 종목을 final 30에 강제 포함 (매도 분석 가능하게)
+- **Chart Overwriting**: 매일 덮어쓰기 (버저닝 없음)
 
 ### Database (database/)
-- **Schema Files**: `database-erd.sql` contains complete table definitions
-- **Documentation**: ERD summary and diagram in markdown format
-- **Migration**: No automated migration framework, manual SQL execution required
+- **Schema File**: `database/schema.sql` (통합 DDL, 참고용)
+- **실제 적용**: Liquibase (`api-server/src/main/resources/db/changelog/`, mvp context)
+- **문서**: `database/README.md` (테이블 목록·관계·인덱스 전략)
 
 ### Project-Specific Context
-This system is designed for a graduate school final project focusing on AI-powered algorithmic trading. The MVP scope deliberately excludes multi-user support, JWT authentication, and production KIS API integration. All configurations (KIS API keys, KOSPI 100 stock codes) are hardcoded in the codebase.
+대학원 최종 프로젝트(MVP). 단일 사용자(admin) 기준, KIS 모의투자, 무료 Gemini 티어 전제. 멀티 유저·실전 매매·운영 배포는 향후 과제. KIS 키는 `user_kis_accounts`에 Jasypt 암호화 저장, KOSPI 100 종목 코드는 ai-agent에 하드코딩.
 
 ### Git Workflow
 - Main branch: `main`
-- Current development branch: `develop-analysis` (analysis features)
-- Active AI pipeline branch: `ai-trading-pipeline` (referenced in project guide)
+- Current development branch: `develop-analysis`
+- 커밋 규약: Conventional Commits (`feat`, `fix`, `docs`, ...)
 
 ### Analysis View Files
-- `web-app/analysis_view/overview.html` — Standalone analysis overview page
-- `web-app/analysis_view/stock_detail.html` — Stock detail analysis page
-- These are static HTML files separate from the Vue3 router system
+- `web-app/analysis_view/overview.html`, `web-app/analysis_view/stock_detail.html` — Vue3 라우터와 별개의 정적 HTML 분석 화면
