@@ -1,450 +1,203 @@
-# 인증 흐름 및 API 구분 (멀티 유저 환경)
+# 인증 흐름 (JWT)
 
-## 📋 목차
-1. [인증 방식 개요](#1-인증-방식-개요)
-2. [API 종류별 인증 구분](#2-api-종류별-인증-구분)
-3. [KIS API Key 관리 전략](#3-kis-api-key-관리-전략)
-4. [인증 흐름도](#4-인증-흐름도)
-5. [구현 가이드](#5-구현-가이드)
+> Spring Boot API Server의 JWT 기반 인증 구조와 토큰 발급/검증/회전 흐름을 코드 기준으로 정리합니다. KIS API 인증과는 별개입니다.
 
----
-
-## 1. 인증 방식 개요
-
-### 1.1 2단계 인증 구조
-
-```
-사용자 로그인
-    ↓
-[1단계] JWT 인증 (자체 시스템)
-    ├─ Access Token (1시간)
-    ├─ Refresh Token (24시간)
-    └─ Payload에 user_id + kis_account_id 포함
-    ↓
-[2단계] KIS API 인증 (증권사)
-    ├─ 사용자별 AppKey/AppSecret (DB 암호화 저장)
-    ├─ KIS Access Token (24시간, 메모리 캐싱)
-    └─ API 호출 시마다 헤더에 포함
-```
-
-### 1.2 인증 정보 저장 위치
-
-| 정보 | 저장 위치 | 암호화 | 유효기간 |
-|------|----------|--------|----------|
-| **사용자 비밀번호** | DB (users.password) | BCrypt | 영구 |
-| **JWT Secret** | 환경변수 | - | - |
-| **KIS AppKey/AppSecret** | DB (user_kis_account) | Jasypt | 영구 |
-| **JWT Access Token** | 클라이언트 (localStorage) | - | 1시간 |
-| **JWT Refresh Token** | DB (refresh_tokens) | - | 24시간 |
-| **KIS Access Token** | 서버 메모리 (캐시) | - | 24시간 |
+## 목차
+1. [구성 요소](#1-구성-요소)
+2. [토큰 구조](#2-토큰-구조)
+3. [RefreshToken 엔티티와 회전](#3-refreshtoken-엔티티와-회전)
+4. [주요 인증 흐름](#4-주요-인증-흐름)
+   - [login](#41-login)
+   - [register](#42-register)
+   - [refresh](#43-refresh)
+   - [logout](#44-logout)
+   - [reset-password](#45-reset-password)
+5. [요청 인증 필터 (JwtAuthenticationFilter)](#5-요청-인증-필터-jwtauthenticationfilter)
+6. [SecurityConfig 설정](#6-securityconfig-설정)
+7. [앱 JWT vs KIS 토큰 헤더 차이](#7-앱-jwt-vs-kis-토큰-헤더-차이)
+8. [인증 관련 ErrorCode](#8-인증-관련-errorcode)
+9. [관련 문서](#9-관련-문서)
 
 ---
 
-## 2. API 종류별 인증 구분
+## 1. 구성 요소
 
-### 2.1 인증 방식 분류
+| 항목 | 값 |
+|------|-----|
+| JWT 라이브러리 | jjwt 0.12.3 |
+| 서명 알고리즘 | HMAC-SHA (`Keys.hmacShaKeyFor(secret)`) |
+| secret 소스 | `jwt.secret` (env `JWT_SECRET`) |
+| 비밀번호 인코더 | `BCryptPasswordEncoder` |
+| 세션 정책 | STATELESS |
+| 권한 | `CustomUserDetails`가 `ROLE_USER` 부여 |
 
-| API 종류 | 필요한 인증 | 예시 |
-|---------|-----------|------|
-| **Type A: 자체 인증만** | JWT 토큰 | 사용자 정보 조회, 설정 조회 |
-| **Type B: KIS 인증만** | KIS API Key | 종목 시세 조회 (로그인 불필요) |
-| **Type C: 자체 + KIS 인증** | JWT + KIS API Key | 잔고 조회, 주문 실행 |
+`JwtTokenProvider`의 주요 메서드:
 
-### 2.2 API별 상세 분류
-
-#### Type A: 자체 JWT 인증만 필요
-
-| API | Method | 인증 헤더 | 데이터 소스 |
-|-----|--------|-----------|------------|
-| `POST /api/auth/login` | POST | ❌ None | RDB (users) |
-| `POST /api/auth/register` | POST | ❌ None | RDB (users) |
-| `POST /api/auth/refresh` | POST | Refresh Token | RDB (refresh_tokens) |
-| `GET /api/users/profile` | GET | ✅ JWT | RDB (users) |
-| `PUT /api/users/profile` | PUT | ✅ JWT | RDB (users) |
-| `GET /api/settings/trading` | GET | ✅ JWT | RDB (user_trade_config) |
-| `PUT /api/settings/trading` | PUT | ✅ JWT | RDB (user_trade_config) |
-| `GET /api/notifications` | GET | ✅ JWT | RDB (notifications) |
-| `GET /api/ai/recommendations` | GET | ✅ JWT | RDB (ai_trade_decision) |
-| `GET /api/bot/status` | GET | ✅ JWT | RDB (user_trade_config) |
-
-#### Type B: KIS 인증만 필요 (공개 시세 정보)
-
-> **주의**: 실제로는 FastAPI를 통해 제공되므로 Spring Boot에서는 구현하지 않음
-
-| API | Method | 인증 헤더 | 데이터 소스 |
-|-----|--------|-----------|------------|
-| `GET /api/market/indices` | GET | ❌ None (FastAPI 경유) | KIS API (지수 조회) |
-| `GET /api/market/current-price/{code}` | GET | ❌ None (FastAPI 경유) | KIS API (현재가) |
-| `GET /api/market/daily-price/{code}` | GET | ❌ None (FastAPI 경유) | KIS API (일별시세) |
-
-**구현 방식**: FastAPI가 자체 KIS API Key로 조회 후 Spring Boot로 전달하거나 Vue3가 직접 FastAPI 호출
-
-#### Type C: JWT + KIS 인증 모두 필요
-
-| API | Method | 인증 헤더 | 데이터 소스 |
-|-----|--------|-----------|------------|
-| `GET /api/assets/summary` | GET | ✅ JWT | JWT → user_id → KIS AppKey → KIS API (잔고) |
-| `GET /api/assets/holdings` | GET | ✅ JWT | JWT → user_id → KIS AppKey → KIS API (잔고) |
-| `GET /api/trading/buyable-amount` | GET | ✅ JWT | JWT → user_id → KIS AppKey → KIS API (매수가능) |
-| `POST /api/trading/buy` | POST | ✅ JWT | JWT → user_id → KIS AppKey → KIS API (매수주문) |
-| `POST /api/trading/sell` | POST | ✅ JWT | JWT → user_id → KIS AppKey → KIS API (매도주문) |
-| `PUT /api/trading/orders/{id}` | PUT | ✅ JWT | JWT → user_id → KIS AppKey → KIS API (주문정정) |
-| `DELETE /api/trading/orders/{id}` | DELETE | ✅ JWT | JWT → user_id → KIS AppKey → KIS API (주문취소) |
+| 메서드 | 설명 |
+|--------|------|
+| `generateAccessToken(username, userId, kisAccountId)` | access token 발급 |
+| `generateRefreshToken(username)` | refresh token 발급 |
+| `validateToken(token)` | 서명/만료 검증 |
+| `getUsernameFromToken(token)` | subject 추출 |
+| `getUserIdFromToken(token)` | userId claim 추출 |
+| `getKisAccountIdFromToken(token)` | kisAccountId claim 추출 |
 
 ---
 
-## 3. KIS API Key 관리 전략
+## 2. 토큰 구조
 
-### 3.1 문제점: 매번 DB 조회는 비효율적
+| 토큰 | subject | 커스텀 claims | TTL |
+|------|---------|---------------|-----|
+| Access Token | `username` | `userId`, `kisAccountId`, `iat`, `exp` | `3600000ms` (1시간) |
+| Refresh Token | `username` | 없음 (userId/kisAccountId 미포함) | `86400000ms` (24시간) |
 
-```java
-// ❌ 나쁜 예: 매 API 호출마다 DB 조회
-@GetMapping("/assets/holdings")
-public ApiResponse getHoldings(@AuthenticationPrincipal UserDetails user) {
-    // 1. DB에서 KIS 계정 조회
-    UserKisAccount kisAccount = kisAccountRepository.findByUserId(user.getId());
-
-    // 2. DB에서 암호화된 AppKey/AppSecret 복호화
-    String appKey = encryptor.decrypt(kisAccount.getAppKey());
-    String appSecret = encryptor.decrypt(kisAccount.getAppSecret());
-
-    // 3. KIS API 호출
-    return kisApiService.getBalance(appKey, appSecret);
-}
-// 문제: API 호출마다 DB 조회 + 복호화 발생!
-```
-
-### 3.2 해결 방안: JWT Payload에 kis_account_id 포함
-
-#### 3.2.1 JWT 토큰 구조
-
-```json
-{
-  "sub": "testuser",
-  "userId": 1,
-  "kisAccountId": 123,  // ← user_kis_account.id
-  "role": "USER",
-  "iat": 1714617600,
-  "exp": 1714621200
-}
-```
-
-#### 3.2.2 KIS 인증 정보 캐싱 전략
-
-```java
-@Service
-public class KisAuthService {
-
-    // 사용자별 KIS Access Token 캐시 (메모리)
-    // Key: kis_account_id, Value: {accessToken, expiresAt}
-    private final Map<Long, KisTokenCache> userKisTokens = new ConcurrentHashMap<>();
-
-    /**
-     * 사용자별 KIS Access Token 조회
-     * 1. 캐시에서 조회 (유효하면 반환)
-     * 2. 캐시 없거나 만료 시 → DB 조회 + 토큰 발급 + 캐싱
-     */
-    public String getKisAccessToken(Long kisAccountId) {
-        // 1. 캐시 확인
-        KisTokenCache cached = userKisTokens.get(kisAccountId);
-        if (cached != null && !cached.isExpired()) {
-            return cached.getAccessToken();
-        }
-
-        // 2. DB에서 KIS 계정 조회 (최초 1회만)
-        UserKisAccount kisAccount = kisAccountRepository.findById(kisAccountId)
-            .orElseThrow(() -> new IllegalArgumentException("KIS 계정 정보가 없습니다."));
-
-        // 3. 암호화된 AppKey/AppSecret 복호화
-        String appKey = encryptor.decrypt(kisAccount.getAppKey());
-        String appSecret = encryptor.decrypt(kisAccount.getAppSecret());
-
-        // 4. KIS API 토큰 발급
-        String accessToken = kisTokenClient.issueToken(appKey, appSecret);
-
-        // 5. 캐시에 저장 (24시간)
-        userKisTokens.put(kisAccountId, new KisTokenCache(accessToken, 24 * 60 * 60));
-
-        return accessToken;
-    }
-}
-```
-
-#### 3.2.3 API 호출 흐름 (최적화)
-
-```java
-@GetMapping("/assets/holdings")
-public ApiResponse getHoldings(@AuthenticationPrincipal CustomUserDetails user) {
-    // 1. JWT에서 kis_account_id 추출 (DB 조회 없음!)
-    Long kisAccountId = user.getKisAccountId();
-
-    // 2. 캐시에서 KIS Access Token 조회 (최초 1회만 DB 조회)
-    String kisAccessToken = kisAuthService.getKisAccessToken(kisAccountId);
-
-    // 3. KIS API 호출
-    return kisApiService.getBalance(kisAccessToken);
-}
-```
-
-**성능 개선**:
-- 매 API 호출: 0회 DB 조회 (캐시 히트 시)
-- 최초 호출 또는 토큰 만료: 1회 DB 조회 + 암호화 복호화
+> Refresh token에는 `userId` / `kisAccountId`가 들어가지 않습니다. 이 값들은 access token에만 존재합니다.
 
 ---
 
-## 4. 인증 흐름도
+## 3. RefreshToken 엔티티와 회전
 
-### 4.1 로그인 흐름
+`RefreshToken` 엔티티 (테이블 `refresh_tokens`):
 
-```
-[Vue3] → POST /api/auth/login {username, password}
-            ↓
-    [Spring Boot] 1. users 테이블에서 사용자 조회
-                  2. 비밀번호 검증 (BCrypt)
-                  3. user_kis_account 테이블에서 kis_account_id 조회
-                  4. JWT 생성 (payload: userId + kisAccountId)
-            ↓
-    [Vue3] ← {accessToken, refreshToken, user}
-            ↓
-    localStorage에 토큰 저장
-```
+| 컬럼 | 설명 |
+|------|------|
+| `id` | PK |
+| `user` | `@ManyToOne` 사용자 참조 |
+| `token` | unique, 길이 500 |
+| `expiresAt` | 만료 시각 |
+| `createdAt` | 생성 시각 |
+| `revokedAt` | 폐기 시각 (nullable) |
 
-### 4.2 KIS API 호출 흐름 (잔고 조회 예시)
+메서드: `isRevoked()`, `isExpired()`, `revoke()`.
 
-```
-[Vue3] → GET /api/assets/holdings
-         Authorization: Bearer {JWT}
-            ↓
-    [Spring Boot] 1. JWT 검증 및 파싱
-                     - userId = 1
-                     - kisAccountId = 123
-                  2. KisAuthService.getKisAccessToken(123)
-                     - 캐시 확인
-                     - 없으면 DB 조회 + 복호화 + KIS 토큰 발급
-                  3. KIS API 호출
-                     - authorization: Bearer {KIS_ACCESS_TOKEN}
-                     - appkey: {복호화된 AppKey}
-                     - appsecret: {복호화된 AppSecret}
-            ↓
-    [KIS API] ← GET /uapi/domestic-stock/v1/trading/inquire-balance
-            ↓
-    [Spring Boot] ← KIS 응답 수신
-                  4. DTO 변환
-            ↓
-    [Vue3] ← {holdings: [...]}
-```
-
-### 4.3 시세 조회 흐름 (FastAPI 경유)
-
-```
-[Vue3] → GET /api/market/current-price/005930
-            ↓
-    [FastAPI] 1. FastAPI 자체 KIS API Key 사용 (환경변수)
-              2. KIS API 호출 (시세 조회)
-              3. 캐싱 (30초)
-            ↓
-    [Vue3] ← {stockCode: "005930", currentPrice: 71000, ...}
-```
+**회전(rotation) 정책 — 사용자당 활성 토큰 1개:**
+`AuthService.saveRefreshToken`은 로그인 시 `findByUserAndRevokedAtIsNull`로 해당 사용자의 폐기되지 않은 기존 토큰을 먼저 revoke한 뒤 새 토큰을 저장합니다.
 
 ---
 
-## 5. 구현 가이드
+## 4. 주요 인증 흐름
 
-### 5.1 JWT CustomUserDetails
+### 4.1 login
 
-```java
-public class CustomUserDetails implements UserDetails {
-    private Long userId;
-    private String username;
-    private Long kisAccountId;  // ← JWT에서 추출
-    private Collection<? extends GrantedAuthority> authorities;
+엔드포인트: `POST /auth/login` → `LoginResponse`. `AuthService.login` 순서:
 
-    // Getters
-    public Long getUserId() { return userId; }
-    public Long getKisAccountId() { return kisAccountId; }
-}
-```
+| 단계 | 동작 | 실패 시 |
+|------|------|---------|
+| 1 | `findByUsername` | `BadCredentialsException` |
+| 2 | `passwordEncoder.matches` (BCrypt) | `BadCredentialsException` |
+| 3 | `kisAccountRepository.findByUser` | `KisAccountNotFoundException` (KIS 계정 필수) |
+| 4 | access token(userId+kisAccountId) + refresh token 발급 | - |
+| 5 | `saveRefreshToken` (기존 토큰 revoke 후 저장) | - |
+| 6 | `LoginResponse` 반환 | - |
 
-### 5.2 JWT 생성 시 kis_account_id 포함
+> **KIS 계정은 로그인 필수 조건입니다.** KIS 계정이 없으면 인증 정보가 맞아도 로그인할 수 없습니다.
 
-```java
-@Service
-public class JwtTokenProvider {
+### 4.2 register
 
-    public String generateAccessToken(User user) {
-        // user_kis_account 조회
-        UserKisAccount kisAccount = kisAccountRepository.findByUserId(user.getId())
-            .orElse(null);
+엔드포인트: `POST /auth/register` → `RegisterResponse` (201). `AuthService.register` 순서:
 
-        Long kisAccountId = (kisAccount != null) ? kisAccount.getId() : null;
+| 단계 | 동작 | 실패 시 |
+|------|------|---------|
+| 1 | `passwordConfirm` 일치 확인 | `PASSWORD_MISMATCH` |
+| 2 | `existsByUsername` | `USERNAME_DUPLICATE` |
+| 3 | `findByEmail` | `EMAIL_DUPLICATE` |
+| 4 | `User` 생성 (BCrypt password) | - |
+| 5 | (선택) `UserKisAccount` 생성, `isVerified=false` | - |
+| 6 | 기본 `UserTradeConfig` 생성 (`orderAmount=1000000`, `maxHoldings=10`, `orderType="market"`, `isActive=false`) | - |
 
-        return Jwts.builder()
-            .setSubject(user.getUsername())
-            .claim("userId", user.getId())
-            .claim("kisAccountId", kisAccountId)  // ← 포함
-            .claim("role", "USER")
-            .setIssuedAt(new Date())
-            .setExpiration(new Date(System.currentTimeMillis() + accessTokenExpiration))
-            .signWith(SignatureAlgorithm.HS512, jwtSecret)
-            .compact();
-    }
-}
-```
+> 가입 시 토큰을 발급하지 않습니다. 가입 후 별도 `login`이 필요합니다.
 
-### 5.3 KisAuthService 구현
+### 4.3 refresh
 
-```java
-@Service
-@RequiredArgsConstructor
-public class KisAuthService {
+엔드포인트: `POST /auth/refresh` → `RefreshTokenResponse`.
 
-    private final UserKisAccountRepository kisAccountRepository;
-    private final StringEncryptor encryptor;
-    private final KisTokenClient kisTokenClient;
+| 단계 | 동작 |
+|------|------|
+| 1 | `validateToken(jwt)` |
+| 2 | DB `findByToken` 조회 |
+| 3 | `revokedAt == null` 확인 |
+| 4 | 새 access token 발급 (refresh token은 동일 토큰 재사용) |
 
-    // 사용자별 KIS Token 캐시
-    private final Map<Long, KisTokenCache> tokenCache = new ConcurrentHashMap<>();
+### 4.4 logout
 
-    public String getKisAccessToken(Long kisAccountId) {
-        // 1. 캐시 확인
-        KisTokenCache cached = tokenCache.get(kisAccountId);
-        if (cached != null && !cached.isExpired()) {
-            log.debug("KIS token cache hit: {}", kisAccountId);
-            return cached.getAccessToken();
-        }
+엔드포인트: `POST /auth/logout` → `Void`.
 
-        // 2. DB 조회 및 토큰 발급
-        log.info("KIS token cache miss: {}. Issuing new token.", kisAccountId);
-        UserKisAccount account = kisAccountRepository.findById(kisAccountId)
-            .orElseThrow(() -> new IllegalArgumentException("KIS 계정이 없습니다."));
+| 단계 | 동작 |
+|------|------|
+| 1 | `findByToken` |
+| 2 | `revoke()` |
+| 3 | `save` |
 
-        String appKey = encryptor.decrypt(account.getAppKey());
-        String appSecret = encryptor.decrypt(account.getAppSecret());
+### 4.5 reset-password
 
-        String accessToken = kisTokenClient.issueToken(appKey, appSecret);
+엔드포인트: `POST /auth/reset-password` → `Void`.
 
-        // 3. 캐시 저장 (24시간)
-        tokenCache.put(kisAccountId, new KisTokenCache(accessToken, 24 * 60 * 60));
-
-        return accessToken;
-    }
-
-    @Getter
-    @AllArgsConstructor
-    private static class KisTokenCache {
-        private final String accessToken;
-        private final LocalDateTime expiresAt;
-
-        public KisTokenCache(String accessToken, long expiresInSeconds) {
-            this.accessToken = accessToken;
-            this.expiresAt = LocalDateTime.now().plusSeconds(expiresInSeconds);
-        }
-
-        public boolean isExpired() {
-            return LocalDateTime.now().isAfter(expiresAt);
-        }
-    }
-}
-```
-
-### 5.4 Controller에서 사용
-
-```java
-@RestController
-@RequestMapping("/api/assets")
-@RequiredArgsConstructor
-public class AssetsController {
-
-    private final KisAuthService kisAuthService;
-    private final KisApiService kisApiService;
-
-    @GetMapping("/holdings")
-    public ApiResponse<List<HoldingDto>> getHoldings(
-        @AuthenticationPrincipal CustomUserDetails user
-    ) {
-        // 1. JWT에서 kis_account_id 추출
-        Long kisAccountId = user.getKisAccountId();
-        if (kisAccountId == null) {
-            throw new IllegalStateException("KIS 계정이 연동되지 않았습니다.");
-        }
-
-        // 2. KIS Access Token 조회 (캐시 우선)
-        String kisAccessToken = kisAuthService.getKisAccessToken(kisAccountId);
-
-        // 3. KIS API 호출
-        List<HoldingDto> holdings = kisApiService.getHoldings(kisAccessToken);
-
-        return ApiResponse.success(holdings);
-    }
-}
-```
+| 단계 | 동작 |
+|------|------|
+| 1 | `username`으로 사용자 조회 |
+| 2 | `phone`이 저장된 phone과 일치 (불일치 시 `PHONE_MISMATCH`) |
+| 3 | `newPassword` 정규식 검증 (영문+숫자+특수문자, min8) |
+| 4 | BCrypt 비밀번호 업데이트 |
 
 ---
 
-## 6. 보안 고려사항
+## 5. 요청 인증 필터 (JwtAuthenticationFilter)
 
-### 6.1 암호화 방식 (Jasypt)
+`JwtAuthenticationFilter`는 `UsernamePasswordAuthenticationFilter` 앞에 등록됩니다.
 
-```yaml
-# application.yml
-jasypt:
-  encryptor:
-    password: ${JASYPT_PASSWORD}  # 환경변수로 관리
-    algorithm: PBEWithMD5AndDES
-    pool-size: 1
-```
+| 단계 | 동작 |
+|------|------|
+| 1 | `Authorization` 헤더 읽기 |
+| 2 | `"Bearer "` 접두사 제거 (substring 7) |
+| 3 | `validateToken` |
+| 4 | `CustomUserDetailsService.loadUserByUsername`로 사용자 로딩 |
+| 5 | `SecurityContext`에 인증 설정 |
 
-### 6.2 KIS 계정 미연동 사용자 처리
-
-```java
-@GetMapping("/assets/holdings")
-public ApiResponse getHoldings(@AuthenticationPrincipal CustomUserDetails user) {
-    if (user.getKisAccountId() == null) {
-        return ApiResponse.error("KIS_ACCOUNT_NOT_LINKED",
-            "한국투자증권 계정을 먼저 연동해주세요.");
-    }
-    // ...
-}
-```
-
-### 6.3 토큰 캐시 무효화 (계정 정보 변경 시)
-
-```java
-@PutMapping("/users/kis-account")
-public ApiResponse updateKisAccount(@RequestBody UpdateKisAccountRequest request) {
-    // KIS 계정 정보 업데이트
-    userKisAccountRepository.save(...);
-
-    // 캐시 무효화
-    kisAuthService.invalidateCache(kisAccountId);
-
-    return ApiResponse.success("KIS 계정이 업데이트되었습니다.");
-}
-```
+`CustomUserDetails`는 `ROLE_USER` 권한을 부여합니다.
 
 ---
 
-## 7. 최종 요약
+## 6. SecurityConfig 설정
 
-### API 인증 방식 요약표
+| 항목 | 값 |
+|------|-----|
+| permitAll 경로 | `/health`, `/health/**`, `/auth/**`, `/actuator/**`, `/test/**`, `/market/**`, `/company/**` |
+| 그 외 경로 | 인증 필요 |
+| 세션 | STATELESS |
+| CSRF | 비활성화 |
+| CORS | WebConfig (origins `localhost:5173`/`5174`/`3000`) |
+| 비밀번호 | `BCryptPasswordEncoder` |
+| 필터 순서 | `JwtAuthenticationFilter` → `UsernamePasswordAuthenticationFilter` 이전 |
 
-| API 종류 | JWT 필요 | KIS 인증 필요 | 데이터 소스 | 예시 |
-|---------|---------|-------------|------------|------|
-| **Type A** | ✅ | ❌ | RDB | 프로필 조회, 설정 조회, AI 분석 결과 |
-| **Type B** | ❌ | ✅ | KIS API (FastAPI) | 시세 조회 (공개 정보) |
-| **Type C** | ✅ | ✅ | RDB + KIS API | 잔고 조회, 주문 실행 |
+---
 
-### 성능 최적화 핵심
+## 7. 앱 JWT vs KIS 토큰 헤더 차이
 
-1. **JWT Payload에 kis_account_id 포함** → DB 조회 불필요
-2. **KIS Access Token 메모리 캐싱** → 24시간 재사용
-3. **최초 1회만 DB 조회 + 암호화 복호화** → 이후 캐시 사용
+앱 내부 인증과 KIS API 호출은 헤더 구성이 다릅니다.
 
-### 구현 체크리스트
+| 구분 | 헤더 |
+|------|------|
+| 앱 내부 API | `Authorization: Bearer {JWT}` |
+| KIS API 호출 | `authorization: Bearer {KIS_TOKEN}` + `appkey` + `appsecret` + `tr_id` + `custtype=P` |
 
-- [ ] CustomUserDetails에 kisAccountId 필드 추가
-- [ ] JwtTokenProvider에서 kis_account_id를 JWT에 포함
-- [ ] KisAuthService 구현 (캐싱 로직)
-- [ ] Jasypt 설정 (KIS AppKey/AppSecret 암호화)
-- [ ] Controller에서 @AuthenticationPrincipal 사용
-- [ ] KIS 계정 미연동 사용자 에러 처리
+KIS 토큰 발급/캐싱 상세는 [KIS_API_GUIDE.md](KIS_API_GUIDE.md)를 참고하세요.
+
+---
+
+## 8. 인증 관련 ErrorCode
+
+| 대역 | 코드 |
+|------|------|
+| 2000s (auth) | `INVALID_TOKEN=2002`, `REFRESH_TOKEN_REVOKED=2004` |
+| 3000s (user) | `USERNAME_DUPLICATE=3002`, `EMAIL_DUPLICATE=3003`, `PASSWORD_MISMATCH=3004`, `PHONE_MISMATCH=3005` |
+| 4000s (KIS) | `KIS_ACCOUNT_NOT_FOUND=4000`, `KIS_OAUTH_FAILED=4004` |
+
+---
+
+## 9. 관련 문서
+
+- [../README.md](../README.md) — 프로젝트 개요 및 실행 방법
+- [API_DESIGN.md](API_DESIGN.md) — 전체 REST API 명세
+- [KIS_API_GUIDE.md](KIS_API_GUIDE.md) — KIS Open API 연동 가이드
+- [ARCHITECTURE.md](ARCHITECTURE.md) — 시스템 아키텍처
+- [STATUS.md](STATUS.md) — 구현 현황
