@@ -10,8 +10,9 @@
 |------|------|
 | [README.md](./README.md) | (이 문서) 모듈 소개, 문서 인덱스, 개발 명령어, 빠른 시작 |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | 디렉터리 구조, 라우팅 표, 상태관리(Pinia), API 레이어(axios 인터셉터·토큰), 빌드/PWA, 백엔드·AI 연동 흐름 |
-| [SCREENS.md](./SCREENS.md) | 화면별 기능 설계서 — 목적, 주요 컴포넌트, 호출 API, 데이터 흐름, 실데이터/Mock 여부 |
 | [STATUS.md](./STATUS.md) | 화면/기능별 진행 상황(완료·진행중·미착수), 실데이터 연동 현황, 미확인/TODO 항목 |
+| [USAGE.md](./USAGE.md) | 설치·환경변수·개발 서버·빌드·배포(PWA/Nginx)·트러블슈팅 (사용 방법) |
+| [SCREENS.md](./SCREENS.md) | 화면별 기능 설계서 — 목적, 주요 컴포넌트, 호출 API, 데이터 흐름, 실데이터/Mock 여부 |
 
 ## 기술 스택 (한눈에)
 

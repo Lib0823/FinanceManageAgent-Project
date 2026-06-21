@@ -10,8 +10,9 @@ AI 주식 자동매매 시스템의 **Vue 3 SPA 프런트엔드** (모바일 우
 |------|------|
 | [_docs/README.md](./_docs/README.md) | 문서 인덱스, 기술 스택, 개발 명령어, 빠른 시작 |
 | [_docs/ARCHITECTURE.md](./_docs/ARCHITECTURE.md) | 디렉터리 구조, 라우팅 표, 상태관리, API 레이어, 빌드/PWA, 연동 흐름 |
-| [_docs/SCREENS.md](./_docs/SCREENS.md) | 화면별 기능 설계서(목적·컴포넌트·API·데이터 흐름) |
 | [_docs/STATUS.md](./_docs/STATUS.md) | 화면/기능별 진행 상황, 실데이터 연동 현황, 미확인/TODO |
+| [_docs/USAGE.md](./_docs/USAGE.md) | 설치·환경변수·개발 서버·빌드·배포·트러블슈팅 |
+| [_docs/SCREENS.md](./_docs/SCREENS.md) | 화면별 기능 설계서(목적·컴포넌트·API·데이터 흐름) |
 
 ## 개발 명령어
 
