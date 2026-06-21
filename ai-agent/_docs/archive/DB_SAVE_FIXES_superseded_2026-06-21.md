@@ -558,5 +558,5 @@ python _claude/verify_db_data.py
 
 ## 🔗 관련 문서
 
-- [Database Schema](../database/schema.sql)
-- [Pipeline Architecture](../CLAUDE.md)_
+- [Database Schema](../../../database/schema.sql)
+- [Pipeline Architecture](../../../CLAUDE.md)_
