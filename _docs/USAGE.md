@@ -25,7 +25,7 @@ docker compose up -d --build
 | 서비스 | 접속 | 비고 |
 |--------|------|------|
 | postgres | localhost:5432 | DB: financemanage / admin / admin1234 |
-| api-server | http://localhost:7070/api | 부팅 시 Liquibase가 스키마(17 테이블 + 2 뷰) 자동 마이그레이션 |
+| api-server | http://localhost:7070/api | 부팅 시 Liquibase가 스키마(17 테이블 + 4 뷰) 자동 마이그레이션 |
 | ai-agent | http://localhost:8000 | 파이프라인 코어 |
 | web-app | http://localhost:3000 | nginx가 `/api`를 api-server로 프록시 |
 
@@ -59,7 +59,7 @@ DB만 도커로 띄우고 세 앱은 로컬에서 실행합니다. 다음 런타
 docker compose up -d postgres   # PostgreSQL 16만 기동 (DB: financemanage / admin / admin1234)
 ```
 
-스키마(17개 테이블 + 2개 뷰)는 **api-server 실행 시 Liquibase가 자동 마이그레이션**합니다(`api-server/src/main/resources/db/changelog/`). 수동 적용 참고용은 [`../database/schema.sql`](../database/schema.sql) ([테이블 목록](../database/README.md)).
+스키마(17개 테이블 + 4개 뷰)는 **api-server 실행 시 Liquibase가 자동 마이그레이션**합니다(`api-server/src/main/resources/db/changelog/`). 수동 적용 참고용은 [`../database/schema.sql`](../database/schema.sql) ([테이블 목록](../database/README.md)).
 
 직접 PostgreSQL을 설치해 쓸 경우 `financemanage` 데이터베이스를 만들고 각 모듈 설정에 접속 정보를 맞춰주세요.
 

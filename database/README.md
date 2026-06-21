@@ -5,19 +5,36 @@ AI 주식 자동매매 시스템 데이터베이스 스키마 문서
 ## 개요
 
 - **DBMS**: PostgreSQL 16
-- **총 테이블 수**: 17개 (+ 뷰 2개)
+- **총 테이블 수**: 17개 (+ 뷰 4개)
 - **스키마**: 단일 public 스키마 (MVP 단순화)
-- **실제 적용**: Liquibase (`api-server/src/main/resources/db/changelog/`)
+- **스키마 소스(편집 대상)**: **Liquibase** changelog (`api-server/src/main/resources/db/changelog/`)
 
 ## 파일 구조
 
 ```
 database/
-├── schema.sql   # 통합 DDL (전체 17 테이블 + 2 뷰, 참고용)
-└── README.md    # 이 파일
+├── schema.sql           # 전체 DDL 스냅샷 (자동 생성 — 편집 금지)
+├── generate-schema.sh   # schema.sql 재생성 스크립트
+└── README.md            # 이 파일 (사람·AI용 스키마 참조: 테이블 카탈로그·ERD·흐름)
 ```
 
-> **실제 스키마 관리는 Liquibase**가 담당합니다. `schema.sql`은 전체 구조를 한눈에 보기 위한 참고용 통합 DDL이며, 직접 실행 대신 Liquibase changelog를 수정하세요.
+### 단일 소스 원칙 (Single Source of Truth)
+
+스키마 관리 지점은 **Liquibase changelog 하나**입니다. `database/`는 여러 모듈(api-server·ai-agent 등)이 공유하는 **참조 지점**입니다.
+
+| 파일 | 역할 | 편집 |
+|------|------|------|
+| `api-server/.../db/changelog/` | 스키마 소스 (Liquibase가 부팅 시 적용) | ✅ **여기만 편집** |
+| `database/schema.sql` | 적용된 스키마의 전체 DDL 스냅샷 | ❌ 자동 생성 (`pg_dump`) |
+| `database/README.md` | 사람·AI용 카탈로그/ERD/흐름 | ✅ 설명 보강 |
+
+**스키마 변경 워크플로우**:
+1. `api-server/src/main/resources/db/changelog/`에 changeset 추가/수정
+2. `docker compose up -d --build api-server` (또는 로컬 `./gradlew bootRun`) → Liquibase가 DB에 적용
+3. `./database/generate-schema.sh` → `schema.sql` 재생성 (라이브 DB에서 `pg_dump -s`)
+4. 필요 시 이 README의 테이블 카탈로그 갱신
+
+> `schema.sql`을 직접 실행하거나 손으로 수정하지 마세요. 항상 changelog가 소스입니다.
 
 상위 시스템 데이터 흐름은 [`../_docs/ARCHITECTURE.md`](../_docs/ARCHITECTURE.md) 참고.
 
@@ -62,12 +79,14 @@ database/
 | `feature_threshold_config` | 안전망 필터 임계값 (BUY/SELL 규칙, 동적 조정) | ai-agent (기본값 seed) |
 | `trade_history` | 주문 체결 이력 (KIS 주문번호, 상태, 체결가) | Spring Boot |
 
-### 5. 뷰 (2개)
+### 5. 뷰 (4개)
 
 | 뷰명 | 설명 |
 |------|------|
 | `v_latest_trade_plan` | 당일 매매 계획 요약 (계획/통과/실행 건수, 예상 금액) |
 | `v_decision_with_filter` | Gemini 판단 + 안전망 필터 결합 결과 (최근 7일) |
+| `v_market_overview` | 시장 일일 요약 (KOSPI 지수·등락·수급·시장감성) + 당일 매수/매도 시그널·필터 통과 집계 |
+| `v_stock_analysis_summary` | 종목별 11개 피처 통합 (스코어·수급·재무·감성·시계열·실시간가 결합) |
 
 ---
 
@@ -114,7 +133,7 @@ trade_history             ← KIS API 체결 결과
 - 각 규칙별 통과 여부 (예: `uncertainty_check`, `foreign_net_buy_check`, `sentiment_check` 등)
 
 ### feature_threshold_config
-- 안전망 필터 임계값을 동적으로 관리. `schema.sql` 실행 시 11개 피처 기본 규칙 seed
+- 안전망 필터 임계값을 동적으로 관리. Liquibase changelog가 11개 피처 기본 규칙을 seed
   (`foreign_net_buy`, `institutional_net_buy`, `sentiment_score`, `prophet_price_trend`,
   `prophet_volume_trend`, `prophet_price_uncertainty`, `per`, `roe`, `operating_margin`,
   `morning_return`, `close_position`)

@@ -127,7 +127,7 @@ score = |foreign_net_buy|*0.3 + |institutional_net_buy|*0.3 + vol_avg_multiple*0
 | Backend | Spring Boot 4.1.0-SNAPSHOT, Java 21, Spring Data JPA, Spring Security + JWT(jjwt 0.12.3), Jasypt(AES-256), Liquibase, Gradle |
 | AI Pipeline | Python 3.11+, FastAPI, APScheduler, pandas, NumPy, scikit-learn, Prophet, transformers(KR-FinBERT), matplotlib |
 | AI Model | Gemini API (무료 티어) |
-| Database | PostgreSQL 16 (17 tables + 2 views) |
+| Database | PostgreSQL 16 (17 tables + 4 views) |
 | Search | Elasticsearch 8.x (확장 예정) |
 | Infra | Docker, Docker Compose |
 | 외부 API | KIS Developers (모의투자), DART (재무·공시) |

@@ -172,7 +172,7 @@ exception/    GlobalExceptionHandler, BusinessException, ErrorCode 등
 
 ## Database Schema
 
-**실제 테이블: 17개 + 뷰 2개** (Liquibase가 8개 changelog로 생성). 전체 목록·관계는 [`database/README.md`](database/README.md), DDL은 [`database/schema.sql`](database/schema.sql).
+**실제 테이블: 17개 + 뷰 4개** (Liquibase가 8개 changelog로 생성). 전체 목록·관계는 [`database/README.md`](database/README.md), DDL 스냅샷은 [`database/schema.sql`](database/schema.sql)(자동 생성 — `database/generate-schema.sh`).
 
 | 그룹 | 테이블 |
 |------|--------|
@@ -192,7 +192,7 @@ exception/    GlobalExceptionHandler, BusinessException, ErrorCode 등
 | Backend API | Spring Boot 4.1, Java 21, Spring Data JPA, Spring Security + JWT(jjwt 0.12.3), Jasypt, Liquibase, PostgreSQL, Gradle |
 | AI Pipeline | Python 3.11+, FastAPI, APScheduler, pandas, NumPy, scikit-learn, Prophet, transformers (KR-FinBERT), matplotlib |
 | AI Model | Gemini API (free tier) |
-| Database | PostgreSQL 16 (17 tables + 2 views) |
+| Database | PostgreSQL 16 (17 tables + 4 views) |
 | Search | Elasticsearch 8.x (확장 예정) |
 | Infra | Docker, Docker Compose |
 | External APIs | KIS Developers (mock trading), DART (financial data) |
