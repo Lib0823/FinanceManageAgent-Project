@@ -4,6 +4,9 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install
 COPY . .
+# 컨테이너에서는 nginx가 /api 를 api-server로 프록시하므로 상대경로(/api)로 빌드
+ARG VITE_API_BASE_URL=/api
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 RUN npm run build
 
 # 2단계: 배포 (Nginx 환경)

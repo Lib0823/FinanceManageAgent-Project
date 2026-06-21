@@ -107,18 +107,35 @@ flowchart TD
 
 ## 빠른 시작 (Quick Start)
 
+### 방법 A — Docker Compose로 전체 실행 (권장)
+
+**Docker만 설치돼 있으면** 4개 서비스(postgres·api-server·ai-agent·web-app)가 한 번에 뜹니다. Java·Node·Python을 따로 설치할 필요가 없습니다.
+
 ```bash
-# 1. DB (PostgreSQL만 활성화되어 있음)
-docker-compose up -d
+cp .env.example .env          # 키 입력 (아래 주의 참고)
+docker compose up -d --build
+```
 
-# 2. api-server (:7070) — Liquibase가 스키마 자동 마이그레이션
-cd api-server && ./gradlew bootRun
+| 서비스 | 접속 |
+|--------|------|
+| web-app | http://localhost:3000 |
+| api-server | http://localhost:7070/api |
+| ai-agent | http://localhost:8000 |
+| postgres | localhost:5432 |
 
-# 3. web-app (:5173)
-cd web-app && npm install && npm run dev
+> ⚠️ **ai-agent는 `KIS_APP_KEY`·`KIS_APP_SECRET`가 `.env`에 있어야 기동됩니다** (없으면 ai-agent 컨테이너만 재시작 반복). postgres·api-server·web-app은 키 없이도 정상 기동됩니다.
+>
+> ⚠️ **최초 빌드는 수~십 분** 걸립니다 — ai-agent 이미지가 torch·prophet·KR-FinBERT를 포함해 수 GB이며, KR-FinBERT 모델은 최초 실행 시 다운로드됩니다(이후 `hf-cache` 볼륨 재사용). 이후 기동은 빠릅니다.
 
-# 4. ai-agent (:8000) — Prophet 때문에 venv 필수
-cd ai-agent && ./run_dev.sh
+### 방법 B — 로컬 개발 실행
+
+DB만 도커로 띄우고 세 앱은 로컬에서 실행합니다(코드 수정·핫리로드에 적합). 이 방법은 **Java 21 · Node.js 20+ · Python 3.11+** 가 사전 설치돼 있어야 합니다.
+
+```bash
+docker compose up -d postgres              # DB만 기동
+cd api-server && ./gradlew bootRun         # :7070 (Liquibase 자동 마이그레이션)
+cd web-app   && npm install && npm run dev # :5173
+cd ai-agent  && ./run_dev.sh               # :8000 (Prophet 때문에 venv 필수)
 ```
 
 설치 요구사항 · 환경변수 · 외부 API 키 발급 · 트러블슈팅 등 **자세한 실행 방법은 [`_docs/USAGE.md`](_docs/USAGE.md)** 를 참고하세요.

@@ -28,7 +28,7 @@ class TradeExecutor:
         Initialize trade executor.
 
         Args:
-            api_base_url: Spring Boot API-Server base URL (e.g., http://api-server:8080)
+            api_base_url: Spring Boot API-Server base URL (e.g., http://api-server:7070)
             timeout: HTTP request timeout in seconds
         """
         self.api_base_url = api_base_url.rstrip('/')

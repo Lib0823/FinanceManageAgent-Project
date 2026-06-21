@@ -109,7 +109,7 @@
 | 항목 | 상태 | 비고 |
 |------|------|------|
 | AI 분석 화면 연동 | 📅 | ai-agent DB 적재분을 api-server 경유로 web-app에 노출 |
-| ai-agent → api-server 매매 실행 e2e | 🔄 | `is_active=true` 경로 통합 검증 |
+| ai-agent → api-server 매매 실행 e2e | 🔄 | `is_active=true` 경로 통합 검증. ai-agent `TradeExecutor`가 호출하는 경로(`/api/trading/execute`, `/api/config/{id}`, `/api/assets/holdings`)가 api-server 실제 엔드포인트(`/trading/...`, `/users/trade-config`, `/assets/holdings`)와 불일치 → 정합 필요 |
 | 휴대폰 인증 실연동 | ⚠️ | 현재 임시 우회 (회원가입·비밀번호 재설정) |
 | api-server 테스트 갱신 | ⚠️ | 예외 체계 변경 후 일부 테스트 stale 가능성 |
 | KIS 실계정 연동 | ⏸️ | 현재 모의투자, `user_kis_accounts`에 실키 입력 시 동작 |
