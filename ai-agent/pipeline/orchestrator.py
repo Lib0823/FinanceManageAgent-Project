@@ -28,7 +28,7 @@ class PipelineOrchestrator:
     4. Save results to database
     """
 
-    def __init__(self, api_server_url: str = "http://api-server:8080"):
+    def __init__(self, api_server_url: str = "http://api-server:7070"):
         # Stage 1: Filtering
         self.kis_client = KISClient()  # Single shared instance for OAuth token caching
         self.stock_filter = StockFilter()
