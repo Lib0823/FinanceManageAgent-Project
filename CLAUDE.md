@@ -92,6 +92,8 @@ ai-agent → Spring Boot         : is_active=true일 때 매매 실행 요청
 > web-app은 ai-agent를 직접 호출하지 않습니다. ai-agent가 DB에 쓴 분석 결과를 Spring Boot의 `MarketAnalysisController`/`MarketDataController`/`CompanyController`가 중계합니다.
 
 ### Daily Pipeline Flow (APScheduler @ 평일 08:50 KST)
+> **스케줄 범위**: 자동 스케줄(`run_stage1_sync`)은 **Stage 1만** 실행. 전체(Stage 1~6, `run_complete_pipeline`)는 `POST /api/pipeline/trigger` 수동 실행. 상세: [`ai-agent/_docs/PIPELINE_DESIGN.md`](ai-agent/_docs/PIPELINE_DESIGN.md)
+
 1. **Stage 0 — 휴장일 체크**: 주말·공휴일이면 중단
 2. **Stage 1 — Stock Filtering**: KOSPI 100 → StandardScaler scoring → Top 30
    - `score = abs(foreign_net_buy)*0.3 + abs(institutional_net_buy)*0.3 + vol_avg_multiple*0.3 + price_volatility*0.1`
@@ -101,10 +103,10 @@ ai-agent → Spring Boot         : is_active=true일 때 매매 실행 요청
    - **Quantitative**: 4 KIS features + 3 DART financials
    - **Sentiment**: KR-FinBERT (track 1: 시장 뉴스, track 2: 종목 뉴스)
    - **Time-Series**: Prophet 120-day forecasting → D+1~D+5 trends
-5. **Chart Generation**: 4 matplotlib PNGs → `/static/charts/` (매일 덮어쓰기)
-6. **Stage 4 — AI Decision**: Gemini API가 11 피처 판단 → Buy/Sell TOP3 → `ai_trade_decision`
-7. **Stage 5 — Safety Filter**: 임계값 기반 사후 검증 → `safety_filter_result`
-8. **Stage 6 — Trade Execution**: `is_active=true`면 POST to Spring Boot → KIS 주문 → `trade_execution_plan`
+   - (matplotlib 차트 생성은 **미구현** — `/static/charts/` 없음)
+5. **Stage 4 — AI Decision**: Gemini API가 11 피처 판단 → Buy/Sell TOP3 → `ai_trade_decision`
+6. **Stage 5 — Safety Filter**: 임계값 기반 사후 검증 → `safety_filter_result`
+7. **Stage 6 — Trade Execution**: `is_active=true`면 POST to Spring Boot → KIS 주문 → `trade_execution_plan`
 
 ### Frontend Architecture (Vue3)
 - **Router**: Vue Router 4 with lazy-loaded views
@@ -152,7 +154,7 @@ exception/    GlobalExceptionHandler, BusinessException, ErrorCode 등
 - **구조**: `pipeline/`(orchestrator, scheduler), `analysis/`(filter, quantitative, sentiment, timeseries), `collectors/`, `models/`, `ai/`, `filters/`(safety_filter), `execution/`(trade_executor), `database/`
 - **ML Stack**: pandas, NumPy, scikit-learn (StandardScaler), Prophet
 - **NLP**: transformers (KR-FinBERT)
-- **Charts**: matplotlib + NanumGothic font
+- **Charts**: matplotlib + NanumGothic font (현재 차트 생성 단계는 미구현)
 - **AI**: Gemini API (무료 티어, 1 call/day)
 - **Async**: asyncio for parallel KIS API calls (rate limit: 5 req/sec)
 
@@ -210,11 +212,10 @@ exception/    GlobalExceptionHandler, BusinessException, ErrorCode 등
 
 ### AI Pipeline (ai-agent)
 - **venv 필수**: 시스템 python3 직접 실행 시 Prophet 깨짐 → `prophet_forecast` NULL
-- **Font Dependency**: NanumGothic 설치 필요 (matplotlib 한글 렌더링)
 - **Rate Limiting**: KIS API 5 req/sec, asyncio.Semaphore(5) + 0.2s 간격
-- **Scheduling**: APScheduler (프로그램 내 설정, 평일 08:50 KST)
+- **Scheduling**: APScheduler (프로그램 내 설정, 평일 08:50 KST). 자동 스케줄은 Stage 1만 실행, 전체는 `POST /api/pipeline/trigger`
 - **Data Flow**: 보유 종목을 final 30에 강제 포함 (매도 분석 가능하게)
-- **Chart Overwriting**: 매일 덮어쓰기 (버저닝 없음)
+- **Charts**: matplotlib 차트 생성 단계는 미구현 (NanumGothic 폰트는 추후 차트 추가 시 필요)
 
 ### Database (database/)
 - **Schema File**: `database/schema.sql` (통합 DDL, 참고용)
