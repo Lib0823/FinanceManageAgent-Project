@@ -96,7 +96,7 @@ ai-agent → Spring Boot         : is_active=true일 때 매매 실행 요청
 > web-app은 ai-agent를 직접 호출하지 않습니다. ai-agent가 DB에 쓴 분석 결과를 Spring Boot의 `MarketAnalysisController`/`MarketDataController`/`CompanyController`가 중계합니다.
 
 ### Daily Pipeline Flow (APScheduler @ 평일 08:50 KST)
-> **스케줄 범위**: 자동 스케줄(`run_stage1_sync`)은 **Stage 1만** 실행. 전체(Stage 1~6, `run_complete_pipeline`)는 `POST /api/pipeline/trigger` 수동 실행. 상세: [`ai-agent/_docs/PIPELINE_DESIGN.md`](ai-agent/_docs/PIPELINE_DESIGN.md)
+> **스케줄 범위**: 자동 스케줄(`run_complete_pipeline_sync`)이 **전체 파이프라인(Stage 1~6)**을 실행. 수동 트리거 `POST /api/pipeline/trigger`(`run_complete_pipeline`)도 동일하게 전체 실행. 상세: [`ai-agent/_docs/PIPELINE_DESIGN.md`](ai-agent/_docs/PIPELINE_DESIGN.md)
 
 1. **Stage 0 — 휴장일 체크**: 주말·공휴일이면 중단
 2. **Stage 1 — Stock Filtering**: KOSPI 100 → StandardScaler scoring → Top 30
@@ -217,7 +217,7 @@ exception/    GlobalExceptionHandler, BusinessException, ErrorCode 등
 ### AI Pipeline (ai-agent)
 - **venv 필수**: 시스템 python3 직접 실행 시 Prophet 깨짐 → `prophet_forecast` NULL
 - **Rate Limiting**: KIS API 5 req/sec, asyncio.Semaphore(5) + 0.2s 간격
-- **Scheduling**: APScheduler (프로그램 내 설정, 평일 08:50 KST). 자동 스케줄은 Stage 1만 실행, 전체는 `POST /api/pipeline/trigger`
+- **Scheduling**: APScheduler (프로그램 내 설정, 평일 08:50 KST). 자동 스케줄이 전체 파이프라인(Stage 1~6) 실행. 수동 트리거 `POST /api/pipeline/trigger`도 동일
 - **Data Flow**: 보유 종목을 final 30에 강제 포함 (매도 분석 가능하게)
 - **Charts**: matplotlib 차트 생성 단계는 미구현 (NanumGothic 폰트는 추후 차트 추가 시 필요)
 

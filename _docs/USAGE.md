@@ -134,7 +134,7 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 > ⚠️ **반드시 venv 안에서 실행하세요.** 시스템 python3로 직접 실행하면 Prophet 의존성이 깨져 시계열 예측 결과(`prophet_forecast`)가 NULL로 저장됩니다.
 
-분석 파이프라인은 평일 08:50 KST에 자동 실행되며, 수동 트리거는 `POST http://localhost:8000/api/pipeline/trigger`입니다.
+스케줄러는 평일 08:50 KST에 **전체 파이프라인(Stage 1~6)**을 자동 실행합니다. 수동 트리거 `POST http://localhost:8000/api/pipeline/trigger`로도 실행할 수 있습니다.
 
 ---
 

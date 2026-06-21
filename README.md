@@ -45,7 +45,7 @@ flowchart LR
     USER([사용자]) --> WEB
 ```
 
-> ⏱ **매 거래일(평일) 08:50 KST** 분석 파이프라인이 자동 실행됩니다.
+> ⏱ **매 거래일(평일) 08:50 KST**에 전체 분석 파이프라인(Stage 1~6)이 자동 실행됩니다. 수동 트리거(`POST /api/pipeline/trigger`)로도 실행할 수 있습니다.
 > web-app은 ai-agent를 직접 호출하지 않으며, ai-agent가 DB에 적재한 분석 결과를 **api-server를 통해** 조회합니다.
 
 ---

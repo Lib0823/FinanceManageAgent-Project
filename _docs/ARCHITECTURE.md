@@ -69,7 +69,7 @@ graph TD
 
 ai-agent의 APScheduler가 평일 08:50에 트리거합니다. 상세·설계 근거는 [`ai-agent/_docs/PIPELINE_DESIGN.md`](../ai-agent/_docs/PIPELINE_DESIGN.md) 참고.
 
-> **스케줄 범위 주의**: 자동 스케줄(`run_stage1_sync`)은 **Stage 1 필터링만** 실행합니다. 전체 파이프라인(Stage 1~6, `run_complete_pipeline`)은 `POST /api/pipeline/trigger` 수동 트리거로 실행합니다. ([`ai-agent/_docs/STATUS.md`](../ai-agent/_docs/STATUS.md))
+> 자동 스케줄(`run_complete_pipeline_sync`)이 아래 **전체 파이프라인(Stage 1~6)**을 실행합니다. 수동 트리거 `POST /api/pipeline/trigger`(`run_complete_pipeline`)도 동일한 전체 경로입니다.
 
 ```mermaid
 flowchart TD
