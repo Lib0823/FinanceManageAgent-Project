@@ -40,6 +40,8 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
+> ⚠️ **`KIS_APP_KEY`·`KIS_APP_SECRET`는 startup 필수**다. `main.py`의 lifespan이 기동 시 `PipelineOrchestrator`→`KISClient()`를 생성하는데, 두 값이 없으면 `KISClient`가 `ValueError`를 던져 **서버가 기동되지 않는다**(Docker에서는 컨테이너가 재시작을 반복). 반면 `GEMINI_API_KEY`·`DART_API_KEY`는 비어도 기동되며 해당 분석만 mock/비활성된다.
+
 `.env` 주요 항목:
 
 ```bash

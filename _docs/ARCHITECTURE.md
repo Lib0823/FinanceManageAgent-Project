@@ -14,7 +14,7 @@
 | `postgres` | PostgreSQL 16 | 5432 | 분석 결과·예측·AI 판단·거래 이력 저장 |
 | `elasticsearch` | Elasticsearch 8.x | 9200 | (확장 예정) 검색 |
 
-> **현재 `docker-compose.yml`은 PostgreSQL만 활성화**되어 있고 나머지 서비스는 주석 처리되어 있습니다. 세 애플리케이션은 각각 로컬에서 직접 실행하는 것이 기본 개발 흐름입니다.
+> **`docker-compose.yml`에 4개 서비스(postgres·api-server·ai-agent·web-app)가 모두 정의**되어 있어 `docker compose up -d --build` 한 번으로 전체를 기동할 수 있습니다(web-app은 :3000, nginx가 `/api`를 api-server로 프록시). `elasticsearch`는 코드 미사용이라 주석 처리 상태입니다. 로컬 개발 시에는 `docker compose up -d postgres`로 DB만 띄우고 세 앱을 로컬 실행하는 것도 가능합니다. 상세는 [`USAGE.md`](USAGE.md).
 
 ---
 

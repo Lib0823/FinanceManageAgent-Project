@@ -62,17 +62,21 @@ cd ai-agent
 
 ### Full System (Docker Compose)
 ```bash
-docker-compose up -d     # 현재는 PostgreSQL만 활성화 (나머지 서비스는 주석 처리됨)
-docker-compose down
-docker-compose logs -f
+cp .env.example .env             # 외부 API 키 (비워도 기동됨)
+docker compose up -d --build     # 4개 서비스 전체 기동 (최초 빌드 수~십 분)
+docker compose up -d postgres    # DB만 (로컬 개발 시)
+docker compose down              # 중지
+docker compose logs -f
 ```
 
-**Container Services (compose에 정의된 전체 — 현재 postgres만 활성):**
-- `web-app` → Nginx (port 3000)
-- `api-server` → Spring Boot (port 7070)
-- `ai-agent` → FastAPI (port 8000)
-- `postgres` → PostgreSQL (port 5432) ← 현재 활성
-- `elasticsearch` → Elasticsearch (port 9200)
+**Container Services (모두 활성):**
+- `web-app` → Nginx (port 3000, `/api`는 api-server로 프록시)
+- `api-server` → Spring Boot (port 7070, context-path `/api`)
+- `ai-agent` → FastAPI (port 8000, torch/prophet/KR-FinBERT 포함 → 이미지 수 GB)
+- `postgres` → PostgreSQL (port 5432)
+- `elasticsearch` → (port 9200) 코드 미사용이라 compose에서 주석 처리
+
+> Dockerfile: `api-server/Dockerfile`(멀티스테이지 JDK21→JRE21), `ai-agent/Dockerfile`(python3.11 + fonts-nanum), `web-app/Dockerfile`(node 빌드→nginx). 시크릿은 루트 `.env`를 `env_file`로 주입. 상세: [`_docs/USAGE.md`](_docs/USAGE.md)
 
 ## Architecture & Data Flow
 
