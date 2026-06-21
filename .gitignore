@@ -1,3 +1,8 @@
+# 환경 변수 (실제 값은 절대 커밋 금지 — .env.example만 추적)
+.env
+.env.local
+.env.*.local
+
 # IDE
 .idea/
 *.iml

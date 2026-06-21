@@ -1,0 +1,16 @@
+venv/
+__pycache__/
+*.pyc
+.env
+.env.local
+.env.*
+logs/
+*.log
+.pytest_cache/
+_docs/
+_claude/
+_temp/
+_analysis_flow/
+.serena/
+.claude/
+tests/

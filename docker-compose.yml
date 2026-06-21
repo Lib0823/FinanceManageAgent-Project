@@ -3,62 +3,87 @@ services:
     image: postgres:16
     container_name: financemanage-postgres
     environment:
-      POSTGRES_DB: financemanage
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: admin1234
+      POSTGRES_DB: ${POSTGRES_DB:-financemanage}
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-admin1234}
       TZ: Asia/Seoul
     ports:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      # Schema is now managed by Liquibase in api-server
+      # 스키마는 api-server의 Liquibase가 부팅 시 적용
       # See: api-server/src/main/resources/db/changelog/
     networks:
       - financemanage-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U admin -d financemanage"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-financemanage}"]
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 10s
 
-  # api-server (Spring Boot) - 추후 활성화
-  # api-server:
-  #   build: ./api-server
-  #   container_name: financemanage-api
-  #   ports:
-  #     - "7070:7070"   # app binds 7070 (application.yml server.port)
-  #   depends_on:
-  #     - postgres
-  #   environment:
-  #     SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/financemanage
-  #     SPRING_DATASOURCE_USERNAME: admin
-  #     SPRING_DATASOURCE_PASSWORD: admin1234
-  #   networks:
-  #     - financemanage-network
+  # api-server (Spring Boot) — 인증·매매 실행·조회 API
+  api-server:
+    build: ./api-server
+    container_name: financemanage-api
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-financemanage}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-admin}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-admin1234}
+    ports:
+      - "7070:7070"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - financemanage-network
+    restart: unless-stopped
 
-  # web-app (Vue3 + Nginx) - 추후 활성화
-  # web-app:
-  #   build: ./web-app
-  #   container_name: financemanage-web
-  #   ports:
-  #     - "3000:80"
-  #   networks:
-  #     - financemanage-network
+  # ai-agent (FastAPI) — 수집·3축 분석·Gemini 판단·안전망
+  ai-agent:
+    build: ./ai-agent
+    container_name: financemanage-ai
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: ${POSTGRES_DB:-financemanage}
+      DB_USER: ${POSTGRES_USER:-admin}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-admin1234}
+    volumes:
+      # KR-FinBERT 모델 캐시 (재시작 간 재다운로드 방지)
+      - hf-cache:/root/.cache/huggingface
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - financemanage-network
+    restart: unless-stopped
 
-  # ai-agent (FastAPI) - 추후 활성화
-  # ai-agent:
-  #   build: ./ai-agent
-  #   container_name: financemanage-ai
-  #   ports:
-  #     - "8000:8000"
-  #   depends_on:
-  #     - postgres
-  #   networks:
-  #     - financemanage-network
+  # web-app (Vue3 + Nginx) — 대시보드·AI 분석 화면. /api 는 nginx가 api-server로 프록시
+  web-app:
+    build:
+      context: ./web-app
+      args:
+        VITE_API_BASE_URL: /api
+    container_name: financemanage-web
+    ports:
+      - "3000:80"
+    depends_on:
+      - api-server
+    networks:
+      - financemanage-network
+    restart: unless-stopped
 
-  # elasticsearch - 추후 활성화
+  # elasticsearch — 확장 예정 (현재 코드 미사용이라 비활성)
   # elasticsearch:
   #   image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
   #   container_name: financemanage-es
@@ -72,6 +97,7 @@ services:
 
 volumes:
   postgres-data:
+  hf-cache:
 
 networks:
   financemanage-network:
