@@ -130,7 +130,8 @@ export const assetApi = {
 export const tradingApi = {
   buy: (order) => api.post('/trading/buy', order),
   sell: (order) => api.post('/trading/sell', order),
-  getHistory: () => api.get('/trading/history'),
+  getHistory: (config) => api.get('/trading/history', config),
+  getRecentTrades: (config) => api.get('/trading/recent', config),
   getHoldings: () => api.get('/trading/holdings')
 }
 
@@ -146,13 +147,12 @@ export const tradingApi = {
 //   search: (query) => api.get('/stocks/search', { params: { q: query } })
 // }
 
-// Company API (Not implemented)
-// export const companyApi = {
-//   getInfo: (symbol) => api.get(`/companies/${symbol}`),
-//   getFinancials: (symbol) => api.get(`/companies/${symbol}/financials`),
-//   getDisclosures: (symbol) => api.get(`/companies/${symbol}/disclosures`),
-//   getAiAnalysis: (symbol) => api.get(`/companies/${symbol}/ai-analysis`)
-// }
+// Company API (Spring Boot api-server)
+export const companyApi = {
+  getBasicInfo: (stockCode) => api.get(`/company/${stockCode}/basic-info`),
+  getFinancials: (stockCode) => api.get(`/company/${stockCode}/financials`),
+  getDisclosures: (stockCode) => api.get(`/company/${stockCode}/disclosures`)
+}
 
 // News API (Handled by FastAPI ai-agent)
 export const newsApi = {
@@ -163,10 +163,10 @@ export const newsApi = {
 
 // Market API (Handled by FastAPI ai-agent)
 export const marketApi = {
-  getIndices: () => api.get('/market/indices'),
+  getIndices: (config) => api.get('/market/indices', config),
   getExchangeRates: () => api.get('/market/exchange-rates'),
-  getTopNews: () => api.get('/market/top-news'),
-  getAiRecommendations: () => api.get('/market/ai-recommendations')
+  getTopNews: () => api.get('/market/news'),
+  getAiRecommendations: () => api.get('/market/decisions')
 }
 
 // AI Bot API (Handled by FastAPI ai-agent)
@@ -183,7 +183,11 @@ export const marketAnalysisApi = {
   getSentiment: (date) => api.get('/market/sentiment', { params: date ? { date } : {} }),
   getDecisions: (date) => api.get('/market/decisions', { params: date ? { date } : {} }),
   getLatestDate: () => api.get('/market/latest-date'),
-  getHeatmap: (date) => api.get('/market/heatmap', { params: date ? { date } : {} })
+  getHeatmap: (date) => api.get('/market/heatmap', { params: date ? { date } : {} }),
+  getStockAnalysis: (stockCode, date) =>
+    api.get(`/market/stock-analysis/${stockCode}`, { params: date ? { date } : {} }),
+  getStockDetail: (stockCode, date) =>
+    api.get(`/market/stock-detail/${stockCode}`, { params: date ? { date } : {} })
 }
 
 export default api

@@ -291,5 +291,143 @@ class TestProphetEdgeCases:
         assert uncertainty > 10, f"High volatility should produce high uncertainty, got {uncertainty}"
 
 
+class TestProphetInputCleaning:
+    """Test _clean_for_fit hardening (NaN/inf, constant, insufficient points)."""
+
+    def test_clean_drops_nan_and_inf(self, prophet_forecaster):
+        """NaN/inf rows are removed before fit."""
+        dates = pd.date_range(end=datetime.now(), periods=15, freq='B')
+        y = list(np.linspace(100, 114, 15))
+        y[3] = np.nan
+        y[7] = np.inf
+        df = pd.DataFrame({'ds': dates, 'y': y})
+
+        clean = prophet_forecaster._clean_for_fit(df)
+        assert not clean['y'].isna().any()
+        assert np.isfinite(clean['y']).all()
+        assert len(clean) == 13  # 15 - 2 bad rows
+
+    def test_clean_rejects_constant_series(self, prophet_forecaster):
+        """Constant series (no variance) is rejected as unusable."""
+        df = pd.DataFrame({
+            'ds': pd.date_range(end=datetime.now(), periods=120, freq='B'),
+            'y': [100.0] * 120
+        })
+        clean = prophet_forecaster._clean_for_fit(df)
+        assert clean.empty
+
+    def test_clean_rejects_too_few_points(self, prophet_forecaster):
+        """Fewer than 10 distinct usable points is rejected."""
+        df = pd.DataFrame({
+            'ds': pd.date_range(end=datetime.now(), periods=8, freq='B'),
+            'y': np.linspace(100, 107, 8)
+        })
+        clean = prophet_forecaster._clean_for_fit(df)
+        assert clean.empty
+
+    def test_clean_dedupes_dates(self, prophet_forecaster):
+        """Duplicate dates are collapsed and series stays sorted."""
+        dates = list(pd.date_range(end=datetime.now(), periods=12, freq='B'))
+        dates.append(dates[-1])  # duplicate last date
+        y = list(np.linspace(100, 112, 13))
+        df = pd.DataFrame({'ds': dates, 'y': y})
+
+        clean = prophet_forecaster._clean_for_fit(df)
+        assert clean['ds'].is_monotonic_increasing
+        assert not clean['ds'].duplicated().any()
+
+    def test_train_and_forecast_on_nan_series_recovers(self, prophet_forecaster):
+        """A series with scattered NaN/inf still yields a real 5-point forecast."""
+        dates = pd.date_range(end=datetime.now(), periods=80, freq='B')
+        y = np.linspace(100, 130, 80) + np.random.normal(0, 1, 80)
+        y[10] = np.nan
+        y[20] = np.inf
+        df = pd.DataFrame({'ds': dates, 'y': y})
+
+        forecast = prophet_forecaster.train_and_forecast(df, freq='B')
+        assert len(forecast['yhat']) == 5
+        assert np.isfinite(forecast['yhat']).all()
+
+
+class TestBuyRatioProxyFallback:
+    """Test the OHLCV-based buy-ratio proxy used when trade-volume API fails."""
+
+    def _ohlcv(self, n=80):
+        dates = pd.date_range(end=datetime.now(), periods=n, freq='B')
+        base = np.linspace(1000, 1200, n)
+        return pd.DataFrame({
+            'trade_date': [d.strftime('%Y%m%d') for d in dates],
+            'open': base - 5,
+            'high': base + 20,
+            'low': base - 20,
+            'close': base + np.random.uniform(-15, 15, n),  # varying close position
+            'volume': np.random.randint(1_000_000, 5_000_000, n)
+        })
+
+    def test_proxy_produces_non_empty_bounded_series(self, timeseries_analyzer):
+        """Proxy yields a non-empty series with values in [0, 1]."""
+        ohlcv = self._ohlcv()
+        proxy = timeseries_analyzer._build_buy_ratio_proxy_from_ohlcv('005930', ohlcv)
+        assert not proxy.empty
+        assert (proxy['y'] >= 0).all() and (proxy['y'] <= 1).all()
+
+    def test_proxy_empty_when_no_ohlcv(self, timeseries_analyzer):
+        """Proxy returns empty when there is no OHLCV at all."""
+        proxy = timeseries_analyzer._build_buy_ratio_proxy_from_ohlcv('005930', pd.DataFrame())
+        assert proxy.empty
+
+    @pytest.mark.asyncio
+    async def test_buy_ratio_falls_back_to_proxy_on_volume_failure(self, timeseries_analyzer):
+        """When get_daily_trade_volume fails, buy ratio falls back to OHLCV proxy (non-empty)."""
+        ohlcv = self._ohlcv()
+        with patch.object(timeseries_analyzer.kis_client, 'get_daily_trade_volume',
+                          new_callable=AsyncMock) as mock_vol:
+            mock_vol.side_effect = RuntimeError("KIS API error: ERROR INPUT FIELD NOT FOUND")
+            series = await timeseries_analyzer._prepare_buy_ratio_series('005930', ohlcv)
+
+        assert not series.empty, "Buy ratio must not collapse to empty on volume API failure"
+        assert (series['y'] >= 0).all() and (series['y'] <= 1).all()
+
+
+class TestOhlcvFallbackChain:
+    """Test _fetch_lookback_ohlcv primary→fallback selection."""
+
+    def _frame(self, n):
+        dates = pd.date_range(end=datetime.now(), periods=n, freq='B')
+        base = np.linspace(1000, 1100, n)
+        return pd.DataFrame({
+            'trade_date': [d.strftime('%Y%m%d') for d in dates],
+            'open': base, 'high': base + 10, 'low': base - 10,
+            'close': base, 'volume': np.random.randint(1e6, 5e6, n)
+        })
+
+    @pytest.mark.asyncio
+    async def test_uses_period_when_sufficient(self, timeseries_analyzer):
+        """Period endpoint result is used directly when it has >= MIN_TRADING_DAYS rows."""
+        with patch.object(timeseries_analyzer.kis_client, 'get_daily_ohlcv_period',
+                          new_callable=AsyncMock) as mock_period, \
+             patch.object(timeseries_analyzer.kis_client, 'get_daily_ohlcv',
+                          new_callable=AsyncMock) as mock_daily:
+            mock_period.return_value = self._frame(100)
+            result = await timeseries_analyzer._fetch_lookback_ohlcv('005930')
+
+        assert len(result) == 100
+        mock_daily.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_daily_when_period_short(self, timeseries_analyzer):
+        """Falls back to get_daily_ohlcv when period returns too few rows."""
+        with patch.object(timeseries_analyzer.kis_client, 'get_daily_ohlcv_period',
+                          new_callable=AsyncMock) as mock_period, \
+             patch.object(timeseries_analyzer.kis_client, 'get_daily_ohlcv',
+                          new_callable=AsyncMock) as mock_daily:
+            mock_period.return_value = pd.DataFrame()  # period failed
+            mock_daily.return_value = self._frame(30)  # proven fallback (Stage 1 used 30)
+            result = await timeseries_analyzer._fetch_lookback_ohlcv('005930')
+
+        assert len(result) == 30
+        mock_daily.assert_called_once()
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

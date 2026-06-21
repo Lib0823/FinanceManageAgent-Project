@@ -119,8 +119,8 @@ class TradingDecisionGenerator:
 
 정량 분석 (DART 기반):
 - PER: {self._format_per(row['per'])}
-- ROE: {row['roe']:.2f}%
-- 영업이익률: {row['operating_margin']:.2f}%
+- ROE: {self._format_pct(row['roe'])}
+- 영업이익률: {self._format_pct(row['operating_margin'])}
 
 감성 분석:
 - 뉴스 감성 점수: {row['sentiment_score']:.2f} (범위: -1.0 ~ 1.0)
@@ -149,6 +149,21 @@ class TradingDecisionGenerator:
             return "적자 또는 결측"
         else:
             return f"{per_value:.2f}"
+
+    def _format_pct(self, value) -> str:
+        """
+        Format a percentage feature (ROE, 영업이익률), handling None/NaN for missing DART data.
+
+        Args:
+            value: Numeric value or None/NaN (재무데이터 결측 시)
+
+        Returns:
+            str: Formatted "{value:.2f}%" or "결측" when data is missing
+        """
+        if value is None or pd.isna(value):
+            return "결측"
+        else:
+            return f"{value:.2f}%"
 
     def _generate_gemini_prompt(self, stock_contexts: List[str]) -> str:
         """

@@ -2,6 +2,7 @@ package com.inbeom.apiserver.controller;
 
 import com.inbeom.apiserver.dto.common.ApiResponse;
 import com.inbeom.apiserver.dto.trade.BalanceSummaryResponse;
+import com.inbeom.apiserver.dto.trade.RecentTradeResponse;
 import com.inbeom.apiserver.dto.trade.TradeHistoryResponse;
 import com.inbeom.apiserver.dto.trade.TradeRequest;
 import com.inbeom.apiserver.service.TradingService;
@@ -93,6 +94,24 @@ public class TradingController {
 
         return ResponseEntity.ok(
                 ApiResponse.success("Trade history retrieved from KIS API successfully", history)
+        );
+    }
+
+    /**
+     * GET /api/trading/recent
+     * 홈 화면 알림용 최근 거래내역 (DB trade_history 기반). KIS 라이브가 아니므로 빠르고 안정적이다.
+     */
+    @GetMapping("/recent")
+    public ResponseEntity<ApiResponse<List<RecentTradeResponse>>> getRecentTrades(
+            @RequestHeader("Authorization") String authHeader
+    ) {
+        String token = authHeader.substring(7);
+        Long userId = jwtTokenProvider.getUserIdFromToken(token);
+
+        List<RecentTradeResponse> trades = tradingService.getRecentTrades(userId);
+
+        return ResponseEntity.ok(
+                ApiResponse.success("Recent trades retrieved successfully", trades)
         );
     }
 

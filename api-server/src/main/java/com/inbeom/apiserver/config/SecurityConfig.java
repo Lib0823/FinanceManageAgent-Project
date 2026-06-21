@@ -33,7 +33,7 @@ public class SecurityConfig {
                 session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
             )
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/health", "/health/**", "/auth/**", "/actuator/**", "/test/**", "/market/**").permitAll()
+                .requestMatchers("/health", "/health/**", "/auth/**", "/actuator/**", "/test/**", "/market/**", "/company/**").permitAll()
                 .anyRequest().authenticated()
             )
             .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

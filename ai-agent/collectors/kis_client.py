@@ -408,80 +408,387 @@ class KISClient:
                 logger.error(f"Failed to fetch OHLCV for {stock_code}: {e}")
             return pd.DataFrame()
 
+    async def get_daily_ohlcv_period(
+        self,
+        stock_code: str,
+        days: int = 120
+    ) -> pd.DataFrame:
+        """
+        기간별 일봉 OHLCV 조회 (장기 시계열용, 최근 ~100거래일).
+
+        FHKST01010400(inquire-daily-price)은 한 번에 최대 ~30건만 반환하므로
+        Prophet 학습에는 부족하다. 본 메서드는 기간 지정이 가능한
+        FHKST03010100(inquire-daily-itemchartprice, [국내주식] 기본시세 >
+        국내주식기간별시세(일/주/월/년) v1_국내주식-016)을 사용한다.
+
+        설계 정정(6/12 장애 대응):
+        과거 구현은 달력일 윈도우를 여러 번 쪼개 페이지네이션했고, 그 결과
+        `20251208~20260110` 같은 어긋난 구간을 만들어 KIS가 500을 반복 반환했다.
+        공식 문서/샘플에 따르면 본 엔드포인트는 단일 호출에서 [DATE_1, DATE_2] 구간 중
+        "가장 최근 최대 100건"을 반환한다(예시: 20220101~20220809 → 최근 100건).
+        따라서 충분히 넓은 단일 윈도우(오늘로부터 충분한 달력일 전 ~ 오늘)로 1회만
+        호출하여 최근 100거래일을 안전하게 확보한다. FID_INPUT_DATE_2는 결코 미래일이
+        될 수 없도록 항상 '오늘'로 고정한다.
+
+        Args:
+            stock_code: 6-digit stock code
+            days: 확보 희망 거래일 수 (기본 120, 실제 상한은 엔드포인트 한도 ~100건)
+
+        Returns:
+            get_daily_ohlcv와 동일한 컬럼 구조의 DataFrame (oldest first):
+                - trade_date: 거래일 (YYYYMMDD)
+                - open: 시가
+                - high: 고가
+                - low: 저가
+                - close: 종가
+                - volume: 거래량
+
+            API 오류·휴장 시 빈 DataFrame 반환(상위에서 get_daily_ohlcv로 폴백).
+
+        Note:
+            종목당 API 호출 비용: 1회.
+        """
+        endpoint = '/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice'
+        tr_id = 'FHKST03010100'
+
+        from datetime import datetime as _dt, timedelta as _td
+
+        # 단일 윈도우: 오늘 ~ (오늘 − 충분한 달력일). 거래일 ≈ 0.7 × 달력일이므로
+        # 100거래일(엔드포인트 한도)을 덮으려면 ~150 달력일이면 충분하다. 미래일 방지를
+        # 위해 종료일은 항상 오늘로 고정한다.
+        end_dt = _dt.now()
+        total_calendar_days_needed = int(max(days, 100) / 0.7) + 20
+        start_dt = end_dt - _td(days=total_calendar_days_needed)
+
+        params = {
+            'FID_COND_MRKT_DIV_CODE': 'J',
+            'FID_INPUT_ISCD': stock_code,
+            'FID_INPUT_DATE_1': start_dt.strftime('%Y%m%d'),
+            'FID_INPUT_DATE_2': end_dt.strftime('%Y%m%d'),  # 항상 오늘 (미래일 금지)
+            'FID_PERIOD_DIV_CODE': 'D',  # Daily
+            'FID_ORG_ADJ_PRC': '0'  # 0:수정주가
+        }
+
+        try:
+            result = await self.request('GET', endpoint, tr_id, params=params)
+        except RuntimeError as e:
+            error_str = str(e)
+            if '500' in error_str or 'Internal Server Error' in error_str:
+                logger.warning(f"Market holiday/server error for {stock_code} (period OHLCV)")
+            else:
+                logger.error(f"Failed to fetch period OHLCV for {stock_code}: {e}")
+            return pd.DataFrame()
+
+        # 기간별 시세는 일자별 배열을 output2로 반환한다
+        output_list = result.get('output2', []) or []
+
+        if not output_list:
+            logger.warning(f"No period OHLCV rows for {stock_code}")
+            return pd.DataFrame()
+
+        collected: Dict[str, Dict] = {}
+        for item in output_list:
+            trade_date = item.get('stck_bsop_date')
+            # 빈 행(주말 등) 또는 결측 행 스킵
+            if not trade_date or not item.get('stck_clpr'):
+                continue
+            if trade_date in collected:
+                continue
+            try:
+                collected[trade_date] = {
+                    'trade_date': trade_date,
+                    'open': int(item['stck_oprc']),
+                    'high': int(item['stck_hgpr']),
+                    'low': int(item['stck_lwpr']),
+                    'close': int(item['stck_clpr']),
+                    'volume': int(item['acml_vol'])
+                }
+            except (ValueError, KeyError, TypeError) as parse_err:
+                logger.debug(f"Skipping malformed period OHLCV row for {stock_code}: {parse_err}")
+                continue
+
+        if not collected:
+            logger.warning(f"No period OHLCV data assembled for {stock_code}")
+            return pd.DataFrame()
+
+        df = pd.DataFrame(list(collected.values()))
+        df = df.sort_values('trade_date').reset_index(drop=True)  # Oldest first
+
+        # 최근 days 거래일만 유지
+        if len(df) > days:
+            df = df.tail(days).reset_index(drop=True)
+
+        logger.debug(f"Assembled {len(df)} trading days of period OHLCV for {stock_code}")
+
+        return df
+
+    async def get_daily_trade_volume(
+        self,
+        stock_code: str,
+        days: int = 120
+    ) -> pd.DataFrame:
+        """
+        종목별 일별 매수/매도 체결량 조회 (순매수 비율 계산용).
+
+        FHKST03010800(inquire-daily-trade-volume, [국내주식] 시세분석 >
+        종목별일별매수매도체결량 v1_국내주식-056)은 일자별 총 매수체결량
+        ·총 매도체결량을 반환하며, 한 번의 호출에 최대 100건(거래일)을 조회한다.
+
+        이 값으로 일별 순매수 비율(= 매수체결량 / 총체결량)을 계산하면,
+        총 거래량만으로는 알 수 없는 "매수 주도 vs 매도 주도" 방향성을 확보한다.
+
+        파라미터 정정(6/12 장애 대응):
+        과거 구현은 FID_INPUT_DATE_1/2(기간 지정) + 직접 페이지네이션을 사용했고,
+        KIS가 `ERROR INPUT FIELD NOT FOUND [FID_COND_MRKT_DIV_CODE_1]` 또는 500을
+        반환했다. 공식 샘플(open-trading-api/.../inquire_daily_trade_volume.py)은
+        FID_COND_MRKT_DIV_CODE / FID_INPUT_ISCD / FID_PERIOD_DIV_CODE 3개 필수 필드만으로
+        호출하며 날짜는 선택(미지정 시 최근 100건 반환)이다. 본 구현은 그 정식 형태를
+        따른다(단일 호출, 날짜 미지정). 100건이면 Prophet 학습(>=60)에 충분하다.
+
+        출력 필드(공식 COLUMN_MAPPING 기준):
+        - output2(array, 일자별): stck_bsop_date, total_shnu_qty(총 매수 수량),
+          total_seln_qty(총 매도 수량)
+        - 일부 응답은 shnu_cnqn_smtn/seln_cnqn_smtn(체결량 합계)로 내려오므로
+          파서를 두 변형 모두 허용하도록 관대하게(tolerant) 처리한다.
+
+        Args:
+            stock_code: 6-digit stock code
+            days: 확보할 거래일 수 (기본 120, 실제는 엔드포인트 한도인 ~100건까지)
+
+        Returns:
+            DataFrame (oldest first), 컬럼:
+                - trade_date: 거래일 (YYYYMMDD)
+                - buy_volume: 매수 체결량
+                - sell_volume: 매도 체결량
+                - total_volume: 총 체결량 (buy_volume + sell_volume)
+
+            API 오류·휴장 시 빈 DataFrame 반환(상위에서 가격기반 프록시로 폴백).
+
+        Note:
+            종목당 API 호출 비용: 1회.
+        """
+        endpoint = '/uapi/domestic-stock/v1/quotations/inquire-daily-trade-volume'
+        tr_id = 'FHKST03010800'
+
+        # 공식 샘플과 동일한 필수 3필드만 전송 (날짜 미지정 → 최근 100건 반환).
+        # _1 접미사 필드는 KIS 내부 오류 메시지일 뿐 실제 요구 파라미터가 아니다.
+        params = {
+            'FID_COND_MRKT_DIV_CODE': 'J',  # J:KRX
+            'FID_INPUT_ISCD': stock_code,
+            'FID_PERIOD_DIV_CODE': 'D'  # Daily
+        }
+
+        try:
+            result = await self.request('GET', endpoint, tr_id, params=params)
+        except RuntimeError as e:
+            error_str = str(e)
+            if '500' in error_str or 'Internal Server Error' in error_str:
+                logger.warning(f"Market holiday/server error for {stock_code} (trade volume)")
+            else:
+                logger.error(f"Failed to fetch daily trade volume for {stock_code}: {e}")
+            return pd.DataFrame()
+
+        output_list = result.get('output2', []) or []
+
+        if not output_list:
+            logger.warning(f"No daily trade-volume rows for {stock_code}")
+            return pd.DataFrame()
+
+        def _to_int(item: Dict, *keys: str) -> int:
+            """여러 후보 키 중 처음으로 존재하는 값을 int로 변환(없으면 0)."""
+            for key in keys:
+                if key in item and item.get(key) not in (None, ''):
+                    try:
+                        return int(item.get(key))
+                    except (ValueError, TypeError):
+                        continue
+            return 0
+
+        collected: Dict[str, Dict] = {}
+        for item in output_list:
+            trade_date = item.get('stck_bsop_date')
+            if not trade_date or trade_date in collected:
+                continue
+            # 총 매수/매도 수량: total_shnu_qty/total_seln_qty 우선,
+            # 변형 응답(shnu_cnqn_smtn/seln_cnqn_smtn)도 허용
+            buy_volume = _to_int(item, 'total_shnu_qty', 'shnu_cnqn_smtn')
+            sell_volume = _to_int(item, 'total_seln_qty', 'seln_cnqn_smtn')
+
+            collected[trade_date] = {
+                'trade_date': trade_date,
+                'buy_volume': buy_volume,
+                'sell_volume': sell_volume,
+                'total_volume': buy_volume + sell_volume
+            }
+
+        if not collected:
+            logger.warning(f"No daily trade-volume data assembled for {stock_code}")
+            return pd.DataFrame()
+
+        df = pd.DataFrame(list(collected.values()))
+        df = df.sort_values('trade_date').reset_index(drop=True)  # Oldest first
+
+        if len(df) > days:
+            df = df.tail(days).reset_index(drop=True)
+
+        logger.debug(f"Assembled {len(df)} trading days of trade volume for {stock_code}")
+
+        return df
+
     async def get_minute_data(self, stock_code: str, date: str) -> pd.DataFrame:
         """
         Get minute-level price data for morning_return calculation (09:00-10:00).
 
-        API: FHKST01010600 (분봉 조회)
+        API: FHKST03010200 (주식당일분봉조회, inquire-time-itemchartprice)
+
+        TR 정정(morning_return=0 장애 대응):
+        과거 구현은 TR_ID 'FHKST01010600' 을 사용했는데, 이는 분봉이 아니라
+        "주식현재가 회원사"(inquire-member) 조회용 TR 이다. 그 응답에는 output2
+        (분봉 배열)가 존재하지 않아 항상 빈 DataFrame 을 반환했고, 결과적으로
+        morning_return 이 모든 종목·모든 날짜에서 0.0 으로 저장됐다.
+        본 엔드포인트(inquire-time-itemchartprice)의 정식 TR 은 'FHKST03010200'
+        이며, output2 에 분봉 배열을 반환한다.
+
+        창(window) 구성:
+        본 TR 은 FID_INPUT_HOUR_1 을 "조회 종료 시각"으로 해석하여 그 시각까지의
+        최근 ~30개 분봉만 반환한다(한 호출당 최대 30건). 따라서 09:00~10:00 전체
+        (60분)를 확보하려면 두 번 호출해 합친다:
+          - H=093000 → 09:01~09:30
+          - H=100000 → 09:31~10:00
+        가장 이른 분봉(≈09:01)의 stck_oprc 가 당일 시가(09:00 시가)에 해당한다.
+
+        한계(정직한 명시):
+        본 TR 은 FID_INPUT_DATE_1 을 무시하고 "가장 최근 거래일"의 분봉만 반환한다
+        (과거 임의 일자 분봉 조회 불가). 따라서 date 인자는 호환을 위해 받지만
+        실제로는 KIS 가 제공하는 최신 세션의 09:00~10:00 데이터가 반환된다.
 
         Args:
             stock_code: 6-digit stock code
-            date: Target date in YYYYMMDD format
+            date: Target date in YYYYMMDD format (KIS 가 무시; 최신 세션 반환)
 
         Returns:
-            DataFrame with columns:
+            DataFrame with columns (chronological order):
                 - time: 시각 (HHMMSS)
                 - open_price: 시가
                 - high_price: 고가
                 - low_price: 저가
                 - close_price: 종가
                 - volume: 거래량
+            빈 응답/오류 시 빈 DataFrame.
         """
         endpoint = '/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice'
-        tr_id = 'FHKST01010600'
+        tr_id = 'FHKST03010200'
 
-        params = {
-            'FID_COND_MRKT_DIV_CODE': 'J',
-            'FID_INPUT_ISCD': stock_code,
-            'FID_INPUT_DATE_1': date,
-            'FID_INPUT_HOUR_1': '090000',  # 09:00:00
-            'FID_PW_DATA_INCU_YN': 'Y'  # Include price data
-        }
+        async def _fetch_window(end_hour: str) -> List[Dict]:
+            """end_hour 까지의 최근 ~30개 분봉(raw output2 rows)을 반환."""
+            params = {
+                'FID_ETC_CLS_CODE': '',
+                'FID_COND_MRKT_DIV_CODE': 'J',
+                'FID_INPUT_ISCD': stock_code,
+                'FID_INPUT_HOUR_1': end_hour,  # 조회 종료 시각 (HHMMSS)
+                'FID_PW_DATA_INCU_YN': 'Y'  # 과거 데이터 포함
+            }
+            try:
+                result = await self.request('GET', endpoint, tr_id, params=params)
+            except RuntimeError as e:
+                logger.warning(f"Minute data fetch failed for {stock_code} (end={end_hour}): {e}")
+                return []
+            return result.get('output2', []) or []
 
-        result = await self.request('GET', endpoint, tr_id, params=params)
-        output_list = result.get('output2', [])  # Note: output2 for minute data
+        # 09:00~10:00 전체를 두 번의 호출로 확보 (각 ~30건, 종료시각 기준)
+        rows = await _fetch_window('093000')
+        rows += await _fetch_window('100000')
 
-        if not output_list:
-            logger.warning(f"No minute data for {stock_code} on {date}")
+        if not rows:
+            logger.warning(f"No minute data for {stock_code} (latest session)")
             return pd.DataFrame()
 
-        # Parse minute data
+        # 09:00~10:00 구간만, 시각별 중복 제거하며 파싱
+        seen_times = set()
         data = []
-        for item in output_list:
-            time_str = item['stck_cntg_hour']  # HHMMSS format
-
-            # Filter for 09:00-10:00 period
-            hour = int(time_str[:2])
-            if hour < 9 or hour >= 10:
+        for item in rows:
+            time_str = item.get('stck_cntg_hour')
+            if not time_str or len(time_str) < 4:
                 continue
 
-            data.append({
-                'time': time_str,
-                'open_price': int(item['stck_oprc']),
-                'high_price': int(item['stck_hgpr']),
-                'low_price': int(item['stck_lwpr']),
-                'close_price': int(item['stck_prpr']),
-                'volume': int(item['cntg_vol'])
-            })
+            # 09:00:00 ~ 10:00:00 윈도우 (10:00 포함)
+            hhmm = time_str[:4]
+            if hhmm < '0900' or hhmm > '1000':
+                continue
+            if time_str in seen_times:
+                continue
+            seen_times.add(time_str)
+
+            try:
+                data.append({
+                    'time': time_str,
+                    'open_price': int(item['stck_oprc']),
+                    'high_price': int(item['stck_hgpr']),
+                    'low_price': int(item['stck_lwpr']),
+                    'close_price': int(item['stck_prpr']),
+                    'volume': int(item.get('cntg_vol', 0) or 0)
+                })
+            except (ValueError, KeyError, TypeError) as parse_err:
+                logger.debug(f"Skipping malformed minute row for {stock_code}: {parse_err}")
+                continue
+
+        if not data:
+            logger.warning(f"No 09:00-10:00 minute rows assembled for {stock_code}")
+            return pd.DataFrame()
 
         df = pd.DataFrame(data)
         df = df.sort_values('time').reset_index(drop=True)  # Chronological order
 
-        logger.debug(f"Fetched {len(df)} minutes of data for {stock_code} on {date}")
+        logger.debug(f"Fetched {len(df)} minutes (09:00-10:00) for {stock_code}")
 
         return df
 
-    async def get_current_price(self, stock_code: str) -> Dict[str, float]:
+    @staticmethod
+    def _parse_kis_float(value: Optional[str]) -> Optional[float]:
         """
-        Get current stock price for investment limit calculation.
+        KIS 시세 응답의 숫자 문자열을 float 로 안전 변환.
+
+        KIS inquire-price 응답의 per/pbr/eps 등은 문자열이며, 적자/결측 종목은
+        ''(빈 문자열) 또는 '0' / '0.00' 으로 내려온다. 이런 값은 의미 있는 지표가
+        아니므로 None 으로 정규화한다 (PER=0 은 현실적으로 존재하지 않음).
+
+        Args:
+            value: KIS output 의 문자열 값
+
+        Returns:
+            float 값, 또는 빈값/0/파싱 실패 시 None
+        """
+        if value is None:
+            return None
+        try:
+            cleaned = str(value).replace(',', '').strip()
+            if cleaned == '':
+                return None
+            parsed = float(cleaned)
+            # 0 은 적자/미산출을 의미하는 placeholder → None 으로 처리
+            if parsed == 0.0:
+                return None
+            return parsed
+        except (ValueError, TypeError):
+            return None
+
+    async def get_current_price(self, stock_code: str) -> Dict[str, Optional[float]]:
+        """
+        Get current stock price (and valuation metrics) from KIS.
 
         Args:
             stock_code: 6-digit stock code
 
         Returns:
-            Dict with current_price (현재가)
+            Dict with:
+                - current_price (현재가, int; 실패 시 0)
+                - per (주가수익비율, float 또는 None)
+                - pbr (주가순자산비율, float 또는 None)
+                - eps (주당순이익, float 또는 None)
 
-        API: FHKST01010100 (주식현재가 시세)
+        API: FHKST01010100 (주식현재가 시세).
+        output 에 per/pbr/eps 가 함께 포함되므로 별도 호출 없이 밸류에이션을 얻는다.
+        적자/결측 종목의 per/eps 는 '0'/'' 로 내려오며 None 으로 정규화한다.
         """
         logger.debug(f"Fetching current price for {stock_code}")
 
@@ -502,28 +809,85 @@ class KISClient:
                     output = result['output']
                     current_price = int(output['stck_prpr'])  # 주식 현재가
 
-                    logger.debug(f"Current price for {stock_code}: {current_price:,}원")
+                    per = self._parse_kis_float(output.get('per'))
+                    pbr = self._parse_kis_float(output.get('pbr'))
+                    eps = self._parse_kis_float(output.get('eps'))
+
+                    logger.debug(
+                        f"Price/valuation for {stock_code}: {current_price:,}원, "
+                        f"PER={per}, PBR={pbr}, EPS={eps}"
+                    )
 
                     return {
-                        'current_price': current_price
+                        'current_price': current_price,
+                        'per': per,
+                        'pbr': pbr,
+                        'eps': eps
                     }
                 else:
                     error_msg = result.get('msg1', 'Unknown error')
                     logger.error(f"Failed to fetch current price for {stock_code}: {error_msg}")
-                    return {'current_price': 0}
+                    return {'current_price': 0, 'per': None, 'pbr': None, 'eps': None}
 
         except Exception as e:
             logger.exception(f"Exception while fetching current price for {stock_code}: {e}")
-            return {'current_price': 0}
+            return {'current_price': 0, 'per': None, 'pbr': None, 'eps': None}
 
-    async def get_kospi_index(self) -> Dict[str, float]:
+    async def get_valuation(self, stock_code: str) -> Dict[str, Optional[float]]:
+        """
+        Fetch valuation metrics (PER/PBR/EPS) for a stock from KIS inquire-price.
+
+        get_current_price 의 얇은 래퍼. 재무지표(stock_financial.per) 보강 단계에서
+        의도를 명확히 드러내기 위해 제공한다.
+
+        Args:
+            stock_code: 6-digit stock code
+
+        Returns:
+            Dict with keys per/pbr/eps (각각 float 또는 None)
+        """
+        price_data = await self.get_current_price(stock_code)
+        return {
+            'per': price_data.get('per'),
+            'pbr': price_data.get('pbr'),
+            'eps': price_data.get('eps')
+        }
+
+    async def get_valuations_for_stocks(
+        self,
+        stock_codes: List[str]
+    ) -> Dict[str, Optional[float]]:
+        """
+        Fetch PER for multiple stocks (rate-limited, sequential).
+
+        stock_financial.per 보강용. Stage 2-1(재무) 단계에서 DART 가 채우지 못하는
+        PER 을 KIS 시세로 채우기 위해 사용한다. 각 호출은 get_current_price 의
+        Semaphore + 0.2s 지연을 통해 5 req/sec 제한을 준수한다.
+
+        Args:
+            stock_codes: 6-digit 종목코드 리스트
+
+        Returns:
+            {stock_code: per(float|None)} 매핑
+        """
+        per_map: Dict[str, Optional[float]] = {}
+        for stock_code in stock_codes:
+            try:
+                valuation = await self.get_valuation(stock_code)
+                per_map[stock_code] = valuation.get('per')
+            except Exception as e:
+                logger.warning(f"Valuation fetch failed for {stock_code}: {e}")
+                per_map[stock_code] = None
+        return per_map
+
+    async def get_kospi_index(self, trade_date: Optional[str] = None) -> Dict[str, float]:
         """
         Get KOSPI index data for market daily summary.
 
         API: FHKUP03500100 (업종/지수 조회)
 
         Args:
-            None - KOSPI code is fixed as '0001'
+            trade_date: Trading date in YYYYMMDD format (optional, defaults to today)
 
         Returns:
             Dict with keys:
@@ -534,17 +898,27 @@ class KISClient:
         """
         logger.info("Fetching KOSPI index data")
 
+        # Default to today if no trade_date provided
+        if trade_date is None:
+            from datetime import datetime
+            trade_date = datetime.now().strftime('%Y%m%d')
+
         endpoint = '/uapi/domestic-stock/v1/quotations/inquire-index-price'
         tr_id = 'FHKUP03500100'
 
         params = {
             'FID_COND_MRKT_DIV_CODE': 'U',  # 업종
-            'FID_INPUT_ISCD': '0001'  # KOSPI 코드
+            'FID_INPUT_ISCD': '0001',  # KOSPI 코드
+            'FID_INPUT_DATE_1': trade_date,  # 조회 시작일 (YYYYMMDD)
+            'FID_INPUT_DATE_2': trade_date,  # 조회 종료일 (YYYYMMDD)
+            'FID_PERIOD_DIV_CODE': 'D'  # Daily (일별)
         }
 
         try:
             result = await self.request('GET', endpoint, tr_id, params=params)
-            output = result.get('output', {})
+
+            # IMPORTANT: API returns 'output1' (not 'output')
+            output = result.get('output1', {})
 
             kospi_index = float(output.get('bstp_nmix_prpr', 0))  # 업종 지수
             kospi_change_rate = float(output.get('bstp_nmix_prdy_ctrt', 0))  # 전일 대비 등락률

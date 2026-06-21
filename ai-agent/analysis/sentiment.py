@@ -23,26 +23,40 @@ class SentimentAnalyzer:
     def __init__(self):
         """Initialize sentiment analyzer with KR-FinBERT model."""
         self.kr_finbert = KRFinBERTAnalyzer()
+        # Track 1 결과 보관: analyze_stocks 호출 시 갱신되어 caller가 시장 감성을 영속화할 수 있도록 한다
+        self.last_market_sentiment: float = 0.0  # 시장 감성점수 (-1.0 ~ 1.0)
+        self.last_market_news_count: int = 0  # 시장 전반 분석에 사용된 기사 수
         logger.info("SentimentAnalyzer initialized")
 
     async def analyze_stocks(self, stock_codes: List[str]) -> pd.DataFrame:
         """
         Perform sentiment analysis for filtered stocks.
 
+        Track 1(시장 전반) 결과는 self.last_market_sentiment /
+        self.last_market_news_count 인스턴스 속성에 저장되어, 호출자가
+        market_daily_summary 및 news_analysis(시장 전반 행)에 영속화할 수 있다.
+
         Args:
             stock_codes: List of stock codes (30 filtered stocks)
 
         Returns:
-            DataFrame with columns: stock_code, sentiment_score
+            DataFrame with columns: stock_code, sentiment_score, news_count
         """
         logger.info(f"Starting sentiment analysis for {len(stock_codes)} stocks")
 
         async with NewsCollector() as collector:
-            # Track 2: Stock-specific sentiment (for Gemini)
-            stock_sentiments = await self._analyze_stock_specific(stock_codes, collector)
+            # Track 1: Market sentiment (계산 후 인스턴스에 보관, fallback 으로도 사용)
+            market_sentiment, market_news_count = await self._analyze_market_sentiment(collector)
+            self.last_market_sentiment = market_sentiment
+            self.last_market_news_count = market_news_count
+            logger.info(f"Market sentiment will be used as fallback: {market_sentiment:.4f}")
 
-            # Track 1: Market sentiment (for Vue3 dashboard, stored separately)
-            market_sentiment = await self._analyze_market_sentiment(collector)
+            # Track 2: Stock-specific sentiment (for Gemini)
+            stock_sentiments = await self._analyze_stock_specific(
+                stock_codes,
+                collector,
+                fallback_sentiment=market_sentiment
+            )
 
         # Return stock-specific sentiments for Gemini
         return stock_sentiments
@@ -50,7 +64,8 @@ class SentimentAnalyzer:
     async def _analyze_stock_specific(
         self,
         stock_codes: List[str],
-        collector: NewsCollector
+        collector: NewsCollector,
+        fallback_sentiment: float = 0.0
     ) -> pd.DataFrame:
         """
         Track 2: Analyze stock-specific news (Naver Finance crawling).
@@ -58,9 +73,12 @@ class SentimentAnalyzer:
         Args:
             stock_codes: List of stock codes
             collector: NewsCollector instance
+            fallback_sentiment: Sentiment score to use when stock news not available
 
         Returns:
-            DataFrame with columns: stock_code, sentiment_score
+            DataFrame with columns: stock_code, sentiment_score, news_count
+            (news_count = 분석에 사용된 기사 수, 종목 뉴스가 없어 시장 감성으로
+             대체한 경우 0)
         """
         results = []
 
@@ -70,25 +88,29 @@ class SentimentAnalyzer:
                 articles = await collector.collect_stock_news(stock_code, max_articles=5)
 
                 if not articles:
-                    logger.warning(f"No news found for {stock_code}, using neutral sentiment")
-                    sentiment_score = 0.0
+                    logger.warning(f"No news found for {stock_code}, using market sentiment: {fallback_sentiment:.4f}")
+                    sentiment_score = fallback_sentiment
+                    news_count = 0  # 종목 뉴스 없음 → 시장 감성 대체, 기사 수 0
                 else:
                     # Time-weighted sentiment (newest articles have higher weight)
                     sentiment_score = self.kr_finbert.analyze_multiple_time_weighted(articles)
+                    news_count = len(articles)  # 실제 분석에 사용된 기사 수
 
                 results.append({
                     'stock_code': stock_code,
-                    'sentiment_score': sentiment_score
+                    'sentiment_score': sentiment_score,
+                    'news_count': news_count
                 })
 
-                logger.debug(f"{stock_code}: sentiment_score = {sentiment_score:.4f}")
+                logger.debug(f"{stock_code}: sentiment_score = {sentiment_score:.4f}, news_count = {news_count}")
 
             except Exception as e:
                 logger.error(f"Sentiment analysis failed for {stock_code}: {e}")
-                # Fallback to neutral sentiment
+                # Fallback to market sentiment (기사 분석 실패 → 기사 수 0)
                 results.append({
                     'stock_code': stock_code,
-                    'sentiment_score': 0.0
+                    'sentiment_score': fallback_sentiment,
+                    'news_count': 0
                 })
 
         df = pd.DataFrame(results)
@@ -96,7 +118,7 @@ class SentimentAnalyzer:
 
         return df
 
-    async def _analyze_market_sentiment(self, collector: NewsCollector) -> float:
+    async def _analyze_market_sentiment(self, collector: NewsCollector) -> tuple[float, int]:
         """
         Track 1: Analyze market-wide sentiment (RSS feeds).
 
@@ -106,7 +128,7 @@ class SentimentAnalyzer:
             collector: NewsCollector instance
 
         Returns:
-            float: Market sentiment score (-1.0 to 1.0)
+            tuple[float, int]: (시장 감성점수 (-1.0 ~ 1.0), 분석에 사용된 기사 수)
         """
         try:
             # Collect market news from RSS feeds
@@ -114,29 +136,31 @@ class SentimentAnalyzer:
 
             if not articles:
                 logger.warning("No market news collected, using neutral sentiment")
-                return 0.0
+                return 0.0, 0
 
             # Simple average for market sentiment
             market_score = self.kr_finbert.analyze_multiple_simple_average(articles)
 
             logger.info(f"Market sentiment score: {market_score:.4f} (from {len(articles)} articles)")
 
-            return market_score
+            return market_score, len(articles)
 
         except Exception as e:
             logger.error(f"Market sentiment analysis failed: {e}")
-            return 0.0
+            return 0.0, 0
 
     def save_market_sentiment(self, sentiment_score: float, trade_date: datetime):
         """
         Save market-wide sentiment to database (for Vue3 dashboard).
 
+        Deprecated: 실제 영속화는 orchestrator 가 DatabaseRepository
+        (update_market_sentiment / save_sentiment_analysis) 를 통해 수행한다.
+        본 메서드는 로깅만 담당한다.
+
         Args:
             sentiment_score: Market sentiment score
             trade_date: Trading date
         """
-        # This will be integrated with database repository
-        # For now, just log it
         logger.info(f"Market sentiment on {trade_date.date()}: {sentiment_score:.4f}")
 
     def validate_sentiment_scores(self, df: pd.DataFrame) -> Dict[str, bool]:

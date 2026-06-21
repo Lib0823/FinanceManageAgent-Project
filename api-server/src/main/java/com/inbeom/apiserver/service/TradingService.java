@@ -6,8 +6,10 @@ import com.inbeom.apiserver.dto.kis.KisBalanceResponse;
 import com.inbeom.apiserver.dto.kis.KisDailyCcldResponse;
 import com.inbeom.apiserver.dto.trade.BalanceSummaryResponse;
 import com.inbeom.apiserver.dto.trade.HoldingResponse;
+import com.inbeom.apiserver.dto.trade.RecentTradeResponse;
 import com.inbeom.apiserver.dto.trade.TradeHistoryResponse;
 import com.inbeom.apiserver.exception.UserNotFoundException;
+import com.inbeom.apiserver.repository.TradeHistoryRepository;
 import com.inbeom.apiserver.repository.UserRepository;
 import com.inbeom.apiserver.service.KisAuthService.KisCredentials;
 import lombok.RequiredArgsConstructor;
@@ -34,6 +36,33 @@ public class TradingService {
     private final KisAuthService kisAuthService;
     private final KisApiClient kisApiClient;
     private final UserRepository userRepository;
+    private final TradeHistoryRepository tradeHistoryRepository;
+
+    /**
+     * 홈 알림용 최근 거래내역 (DB trade_history 기반, 최신순 최대 8건).
+     * KIS 라이브 호출이 아니므로 KIS 장애와 무관하게 빠르고 안정적이며, 실패해도 빈 목록을 반환한다.
+     */
+    public List<RecentTradeResponse> getRecentTrades(Long userId) {
+        try {
+            return tradeHistoryRepository.findByUserIdOrderByOrderedAtDesc(userId).stream()
+                    .limit(8)
+                    .map(t -> RecentTradeResponse.builder()
+                            .id(t.getId())
+                            .stockCode(t.getStockCode())
+                            .stockName(t.getStockName())
+                            .orderType(t.getOrderType())
+                            .orderStatus(t.getOrderStatus())
+                            .quantity(t.getQuantity())
+                            .orderPrice(t.getOrderPrice())
+                            .executedPrice(t.getExecutedPrice())
+                            .orderedAt(t.getOrderedAt())
+                            .build())
+                    .collect(Collectors.toList());
+        } catch (Exception e) {
+            log.warn("Failed to load recent trades from DB for userId={}: {}", userId, e.getMessage());
+            return new ArrayList<>();
+        }
+    }
 
     /**
      * Execute buy order via KIS API (VTTC0802U)

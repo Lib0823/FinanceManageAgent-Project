@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
@@ -15,7 +16,18 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class KisApiClient {
 
-    private final RestTemplate restTemplate = new RestTemplate();
+    // KIS 응답이 느리거나 도달 불가일 때 호출이 수십 초(OS 기본) 매달리지 않도록 타임아웃 지정.
+    // 호출부는 예외를 잡아 graceful degrade(빈값/캐시 폴백) 하므로 빠른 실패가 바람직하다.
+    private final RestTemplate restTemplate = buildRestTemplate();
+
+    private static RestTemplate buildRestTemplate() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        // connect 는 짧게(도달 불가 빠른 실패), read 는 넉넉히: 거래내역(inquire-daily-ccld,
+        // 최근 3개월)은 시세보다 느려 7초로는 잘려 500 이 나므로 18초로 둔다. (OS 기본 ~75초 방지)
+        factory.setConnectTimeout(5000);
+        factory.setReadTimeout(18000);
+        return new RestTemplate(factory);
+    }
 
     @Value("${kis.base-url}")
     private String kisBaseUrl;
@@ -34,11 +46,24 @@ public class KisApiClient {
      * - Virtual trading (openapivts): VTTC* (모의투자)
      * - Real trading (openapi): TTTC* (실전투자)
      *
-     * @param baseTrId Base TR_ID (e.g., "VTTC8434R")
-     * @return Converted TR_ID based on base URL
+     * IMPORTANT: Conversion ONLY applies to trading TR_IDs that start with
+     * "VTTC" or "TTTC" (the 실전/모의 distinguishable prefixes). Quotation and
+     * finance TR_IDs (e.g. "FHKST01010100", "FHKST66430200") are identical on
+     * both domains and MUST be returned unchanged — otherwise their prefix gets
+     * corrupted to VTTC/TTTC and the call fails.
+     *
+     * @param baseTrId Base TR_ID (e.g., "VTTC8434R", "FHKST01010100")
+     * @return Converted TR_ID for trading prefixes, unchanged otherwise
      */
     public String convertTrId(String baseTrId) {
         if (baseTrId == null || baseTrId.length() < 4) {
+            return baseTrId;
+        }
+
+        // Only VTTC*/TTTC* trading TR_IDs are domain-dependent. Leave all other
+        // TR_IDs (FHKST*, CTPF*, etc.) untouched.
+        String head = baseTrId.substring(0, 4);
+        if (!head.equals("VTTC") && !head.equals("TTTC")) {
             return baseTrId;
         }
 
@@ -62,12 +87,33 @@ public class KisApiClient {
             Object requestBody,
             Class<T> responseType
     ) {
-        String url = kisBaseUrl + endpoint;
+        return callKisApi(kisBaseUrl, endpoint, method, trId, kisToken, appKey, appSecret, requestBody, responseType);
+    }
 
-        // TR_ID 자동 변환 (Virtual → VTTC*, Real → TTTC*)
+    /**
+     * Call KIS API with an explicit base URL (e.g. 실전 시세/재무 도메인).
+     *
+     * 기존 매매 흐름은 주입된 {@code kisBaseUrl}(모의 도메인)을 그대로 사용하고,
+     * CompanyInfoService 의 시세/재무 호출만 실전 도메인을 명시적으로 넘긴다.
+     * TR_ID 변환은 VTTC/TTTC 매매 prefix 에만 적용되므로 FHKST 시세/재무 TR_ID 는 그대로 전송된다.
+     */
+    public <T> ResponseEntity<T> callKisApi(
+            String baseUrl,
+            String endpoint,
+            HttpMethod method,
+            String trId,
+            String kisToken,
+            String appKey,
+            String appSecret,
+            Object requestBody,
+            Class<T> responseType
+    ) {
+        String resolvedBaseUrl = (baseUrl != null && !baseUrl.isBlank()) ? baseUrl : kisBaseUrl;
+        String url = resolvedBaseUrl + endpoint;
+
+        // TR_ID 자동 변환 (Virtual → VTTC*, Real → TTTC*). FHKST* 등은 변환되지 않음.
         String convertedTrId = convertTrId(trId);
-        String mode = isRealTrading() ? "REAL" : "VIRTUAL";
-        log.debug("TR_ID conversion: {} → {} (mode: {})", trId, convertedTrId, mode);
+        log.debug("KIS call: baseUrl={}, trId: {} → {}", resolvedBaseUrl, trId, convertedTrId);
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
@@ -101,6 +147,22 @@ public class KisApiClient {
             Map<String, String> queryParams,
             Class<T> responseType
     ) {
+        return get(kisBaseUrl, endpoint, trId, kisToken, appKey, appSecret, queryParams, responseType);
+    }
+
+    /**
+     * GET request to KIS API with an explicit base URL (실전 시세/재무 도메인용).
+     */
+    public <T> ResponseEntity<T> get(
+            String baseUrl,
+            String endpoint,
+            String trId,
+            String kisToken,
+            String appKey,
+            String appSecret,
+            Map<String, String> queryParams,
+            Class<T> responseType
+    ) {
         // Build query string
         StringBuilder urlBuilder = new StringBuilder(endpoint);
         if (queryParams != null && !queryParams.isEmpty()) {
@@ -111,7 +173,7 @@ public class KisApiClient {
             urlBuilder.setLength(urlBuilder.length() - 1); // Remove last &
         }
 
-        return callKisApi(urlBuilder.toString(), HttpMethod.GET, trId, kisToken, appKey, appSecret, null, responseType);
+        return callKisApi(baseUrl, urlBuilder.toString(), HttpMethod.GET, trId, kisToken, appKey, appSecret, null, responseType);
     }
 
     /**

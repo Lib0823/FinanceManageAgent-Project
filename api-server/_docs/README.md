@@ -1,213 +1,68 @@
-# API Server Documentation
+# api-server 문서 인덱스
 
-AI 주식 자동매매 시스템 백엔드 API 설계 및 아키텍처 문서
+AI 주식 자동매매 시스템의 백엔드 모듈이다. Spring Boot(Java 21)로 사용자 인증, KIS 모의투자 매매 실행, 시장/AI 분석 데이터 조회 REST API를 제공한다.
 
----
-
-## 📚 문서 목록
-
-### 1️⃣ [SYSTEM_ARCHITECTURE.md](./SYSTEM_ARCHITECTURE.md) ⭐ **개발 전 필독**
-**WEB-API-DB 관계 시각화 및 전체 시스템 아키텍처**
-
-- 전체 시스템 구조도 (Vue3 ↔ Spring Boot/FastAPI ↔ PostgreSQL ↔ KIS API)
-- Authentication Flow (JWT + KIS Token 관리)
-- API 타입 분류 (Type A/B/C)
-- Database ERD 및 테이블 매핑
-- 성능 최적화 전략 (캐싱, 토큰 관리)
-- 배포 아키텍처
-
-**주요 내용:**
-- Mermaid 다이어그램으로 데이터 흐름 시각화
-- API별 인증 요구사항 및 데이터 소스 정리
-- KIS API TR_ID 매핑 테이블
+이 디렉터리(`api-server/_docs/`)만 읽으면 (1) 전체 구조, (2) 진행 상황, (3) 기능 설계를 코드 기준으로 파악할 수 있도록 정리했다. 모든 명세는 `src/main/java/com/inbeom/apiserver/**` 실제 코드에 맞춰 작성되었다.
 
 ---
 
-### 2️⃣ [AUTHENTICATION_FLOW.md](./AUTHENTICATION_FLOW.md) ⭐ **보안 필독**
-**다중 사용자 인증 및 KIS 토큰 관리 최적화**
+## 문서 지도
 
-- JWT Payload 설계 (`kis_account_id` 포함)
-- KIS Access Token 캐싱 전략 (성능 최적화)
-- 3가지 API 인증 타입 (No Auth, JWT, JWT+KIS)
-- Jasypt 암호화 설정
+| 문서 | 설명 |
+|------|------|
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | 패키지 구조, 레이어 흐름, 도메인/JPA 매핑, 외부 연동(KIS·DART), 보안 구성. **개발 전 필독** |
+| [STATUS.md](./STATUS.md) | 엔드포인트·기능별 구현 진행 상황(완료/진행중/미착수) 표 |
+| [USAGE.md](./USAGE.md) | 설치·환경변수·실행·빌드·테스트·트러블슈팅 (사용 방법) |
+| [API_DESIGN.md](./API_DESIGN.md) | 9개 컨트롤러 41개 REST 엔드포인트 전체 명세 |
+| [AUTHENTICATION_FLOW.md](./AUTHENTICATION_FLOW.md) | JWT 발급·검증·리프레시·로그아웃, KIS 계정 연동 인증 흐름 |
+| [KIS_API_GUIDE.md](./KIS_API_GUIDE.md) | KIS Open API 연동(이중 자격증명 경로, TR_ID 매핑, 토큰 캐싱), DART 연동 |
+| [archive/](./archive/) | 일회성 수정 이력 보관(현재 `TRADE_HISTORY_FIX_SUMMARY.md`) |
 
-**핵심 최적화:**
-```
-첫 호출: DB 조회 + 복호화 + KIS API 호출 (~500ms)
-이후 호출: 캐시만 사용 (~50ms, 99% 캐시 히트율)
-```
-
----
-
-### 3️⃣ [KIS_INTEGRATION_GUIDE.md](./KIS_INTEGRATION_GUIDE.md) ⭐ **KIS API 필독**
-**KIS Open API 통합 가이드 (통합 문서)**
-
-- **인증 & 보안**: AppKey/AppSecret 관리, Access Token 발급/갱신, Jasypt 암호화
-- **아키텍처 패턴**: BFF 필수성 (CORS 제약), 토큰 캐싱 전략 (99% 캐시 히트율)
-- **API 매핑**: TR_ID 매핑 테이블, 요청/응답 샘플
-- **구현 가이드**: 실제 Java 코드 예제 (KisAuthService, AssetController, TradingService)
-
-**주요 내용:**
-```
-인증 흐름: AppKey/Secret → KIS Token → Redis Cache (23h)
-BFF 패턴: Vue3 → Spring Boot → KIS API (Direct 호출 ❌)
-성능: 첫 호출 500ms → 캐시 히트 50ms (10배 향상)
-```
-
-**주요 매핑:**
-| App API | KIS TR_ID | 용도 |
-|---------|-----------|------|
-| `GET /api/assets/holdings` | `VTTC8434R` | 잔고조회 |
-| `POST /api/trading/buy` | `VTTC0802U` | 매수주문 |
-| `POST /api/trading/sell` | `VTTC0801U` | 매도주문 |
+읽는 순서 권장: `ARCHITECTURE` → `API_DESIGN` → `AUTHENTICATION_FLOW` / `KIS_API_GUIDE` → 필요 시 `STATUS`.
 
 ---
 
-### 4️⃣ [API_DESIGN.md](./API_DESIGN.md)
-**REST API 엔드포인트 전체 명세**
+## 모듈 요약
 
-- 인증 API (로그인/로그아웃/토큰 갱신)
-- 사용자 API (프로필/설정)
-- 자산 API (잔고/보유종목)
-- 매매 API (매수/매도/거래내역)
-- 시장정보 API (종목검색/현재가/차트)
-- 뉴스 API (시장뉴스/종목뉴스)
-- AI 분석 API (AI 판단/예측/차트)
-
-**API 명세 포함:**
-- HTTP Method, URL, Request/Response
-- 인증 요구사항
-- KIS API 사용 여부
+| 항목 | 값 |
+|------|-----|
+| 언어/런타임 | Java 21 (LTS) |
+| 프레임워크 | Spring Boot 4.1.0-SNAPSHOT, Spring Data JPA, Spring Security, Spring Validation |
+| 인증 | JWT (jjwt 0.12.3, HMAC-SHA), BCrypt 비밀번호 |
+| 암호화 | Jasypt `PBEWITHHMACSHA512ANDAES_256` (KIS appKey/appSecret) |
+| DB | PostgreSQL, Liquibase 마이그레이션 |
+| 빌드 | Gradle |
+| 서버 포트 | `7070`, context-path `/api` (full URL: `http://localhost:7070/api/...`) |
+| 외부 연동 | KIS Open API(모의투자 매매 + 실전 시세/재무), DART(공시·재무) |
 
 ---
 
-## 🗂️ 관련 디렉토리
+## 개발 명령어
 
-### Database 스키마
-- `/database/mvp-schema.sql` - MVP 데이터베이스 스키마
-- `/database/product-schema.sql` - 프로덕션 스키마 (MVP와 동기화)
-- `/database/database-erd.sql` - ERD 다이어그램
-- `/database/database-erd-diagram.md` - ERD 마크다운 문서
-
-### Liquibase 마이그레이션
-- `/api-server/src/main/resources/db/changelog/mvp/v1.0-initial-schema.yaml` - 초기 스키마
-- `/api-server/src/main/resources/db/changelog/mvp/v1.3-schema-updates.yaml` - KIS 인증 최적화 스키마
-
----
-
-## 🚀 개발 시작 전 체크리스트
-
-### 1. 문서 숙지
-- [ ] `SYSTEM_ARCHITECTURE.md` 전체 시스템 이해
-- [ ] `AUTHENTICATION_FLOW.md` JWT + KIS 토큰 관리 이해
-- [ ] `KIS_INTEGRATION_GUIDE.md` KIS API 통합 및 보안 요구사항 확인
-
-### 2. 환경 설정
-- [ ] PostgreSQL 16 설치 및 데이터베이스 생성
-- [ ] `/database/mvp-schema.sql` 실행하여 테이블 생성
-- [ ] 환경 변수 설정 (`JASYPT_PASSWORD`, `KIS_APP_KEY`, etc.)
-
-### 3. 의존성 확인
-- [ ] Java 21 (LTS) 설치
-- [ ] Gradle 빌드 도구
-- [ ] Spring Boot 3.x/4.x
-- [ ] Jasypt (암호화)
-
-### 4. KIS API 계정
-- [ ] 한국투자증권 모의투자 계정 생성
-- [ ] AppKey/AppSecret 발급
-- [ ] Jasypt로 암호화하여 DB 저장
-
-### 5. 보안 검토
-- [ ] JWT Secret 256비트 이상 생성
-- [ ] Jasypt Master Password 안전한 곳에 보관
-- [ ] .env 파일 .gitignore 등록
-
----
-
-## 📊 주요 데이터 흐름 요약
-
-### 로그인 흐름
-```
-사용자 → Vue3 → Spring Boot
-  → DB (users + user_kis_accounts 조회)
-  → JWT 발급 (userId + kisAccountId 포함)
-  ← JWT Token (1h)
-```
-
-### 잔고 조회 흐름 (최초)
-```
-사용자 → Vue3 → Spring Boot (JWT 검증)
-  → Token Cache 확인 (kis_account_id=123)
-  → [캐시 미스] DB 조회 → Jasypt 복호화
-  → KIS OAuth Token 발급
-  → Cache 저장 (24h)
-  → KIS API (VTTC8434R 잔고조회)
-  ← 잔고 데이터
-```
-
-### 잔고 조회 흐름 (이후)
-```
-사용자 → Vue3 → Spring Boot (JWT 검증)
-  → Token Cache 조회 (kis_account_id=123) ✅ 캐시 히트
-  → KIS API (VTTC8434R 잔고조회)
-  ← 잔고 데이터
-
-성능: 500ms → 50ms (10배 빠름, DB 조회 없음)
-```
-
-### AI 분석 흐름
-```
-FastAPI Scheduler (평일 08:50)
-  → KIS API (KOSPI 100 데이터 수집)
-  → StandardScaler (TOP 30 선정)
-  → Prophet (시계열 예측)
-  → KR-FinBERT (감성 분석)
-  → Gemini API (매매 판단)
-  → PostgreSQL INSERT
-  → matplotlib 차트 생성
-
-사용자 → Vue3 → FastAPI
-  → DB (ai_trade_decision 조회)
-  ← AI 판단 결과 + 차트 이미지 URL
-```
-
----
-
-## 🔐 보안 주의사항
-
-### 절대 커밋하지 말 것
-- `.env` 파일
-- `application-local.yml`
-- KIS AppKey/AppSecret 평문
-- JWT Secret 평문
-- Jasypt Master Password
-
-### 암호화 필수
-- `user_kis_accounts.app_key` → Jasypt 암호화
-- `user_kis_accounts.app_secret` → Jasypt 암호화
-- `users.password` → BCrypt 해시
-
-### 환경 변수 관리
 ```bash
-# .env (절대 커밋하지 말 것!)
-JASYPT_PASSWORD=your_strong_master_key_min_32_chars
-JWT_SECRET=your_jwt_secret_min_256_bits
-KIS_APP_KEY=your_kis_app_key
-KIS_APP_SECRET=your_kis_app_secret
+cd api-server
+
+./gradlew build      # 빌드
+./gradlew test       # 테스트 (JUnit 5)
+./gradlew bootRun    # 개발 서버 실행 (port 7070)
+./gradlew clean      # 빌드 산출물 정리
 ```
 
----
-
-## 📞 문의 및 이슈
-
-- 아키텍처 관련: `SYSTEM_ARCHITECTURE.md` 참고
-- 인증 관련: `AUTHENTICATION_FLOW.md` 참고
-- KIS API 관련: `KIS_INTEGRATION_GUIDE.md` 참고
-- API 명세 관련: `API_DESIGN.md` 참고
+로컬 실행 보조 스크립트는 `run-local.sh`를 참고한다.
 
 ---
 
-**작성일:** 2025-05-02
-**버전:** MVP v1.0
-**상태:** 개발 준비 완료 ✅
+## 빠른 시작
+
+1. **DB 준비**: PostgreSQL에 `financemanage` 데이터베이스 생성. 접속 정보 기본값은 `application.yml`의 `spring.datasource`(`localhost:5432`, `admin`/`admin1234`). 스키마는 Liquibase가 부팅 시 `db/changelog/db.changelog-master.yaml`(context `mvp`)로 적용한다.
+2. **환경 변수**: `.env.example`를 복사해 `.env` 작성. 최소 `JWT_SECRET`, `JASYPT_PASSWORD`가 필요하다. 시세/재무·DART 연동을 쓰려면 `KIS_QUOTE_APP_KEY`/`KIS_QUOTE_APP_SECRET`, `DART_API_KEY`를 채운다(비우면 해당 필드는 null로 graceful degrade). `.env`는 `DotenvEnvironmentPostProcessor`가 부팅 시 로드하며, OS 환경 변수가 우선한다.
+3. **실행**: `./gradlew bootRun` 후 `GET http://localhost:7070/api/health`로 헬스 체크.
+4. **사용자/KIS 계정**: 매매 흐름(`/assets`, `/trading`)은 로그인 시 KIS 계정 연동이 필수다. KIS appKey/appSecret는 `user_kis_accounts`에 Jasypt로 암호화 저장된다. 상세는 [KIS_API_GUIDE.md](./KIS_API_GUIDE.md) 참고.
+
+---
+
+## 보안 주의
+
+- `.env`, KIS appKey/appSecret 평문, `JWT_SECRET`, `JASYPT_PASSWORD`는 절대 커밋하지 않는다(`.gitignore` 등록 필수).
+- `users.password`는 BCrypt 단방향 해시, `user_kis_accounts.app_key/app_secret`는 Jasypt 양방향 암호화로 저장한다.
+- 로깅 레벨을 `org.springframework.web=DEBUG`로 올리면 RestTemplate 요청 본문에 KIS 자격증명이 평문으로 남을 수 있다(`application.yml` 주석 참고). 디버깅 시에만 일시적으로 사용한다.

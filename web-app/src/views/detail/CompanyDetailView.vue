@@ -1,16 +1,33 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '@/components/common/AppHeader.vue'
-import { mockCompanyInfo } from '@/services/mockData'
+import { marketAnalysisApi, companyApi } from '@/services/api'
 
 const route = useRoute()
 const router = useRouter()
 
+// route.params.symbol drives the page (route is /company/:symbol)
+const symbol = ref(route.params.symbol || '')
+
 const activeTab = ref('ai')
 const aiSubTab = ref('quant')
-const company = ref(mockCompanyInfo)
+// 헤더에 표시되는 name/symbol 만 보관 (상세 탭 데이터는 각 탭 전용 ref 로 분리)
+const company = ref({ name: symbol.value, symbol: symbol.value })
 const isFavorite = ref(false)
+
+// AI 분석 API 상태
+const aiLoading = ref(true)
+const aiError = ref(false)
+const stockDetail = ref(null)
+const hasAnalysis = computed(() => !!stockDetail.value && stockDetail.value.has_analysis === true)
+
+// 헤더 아이콘: 종목명 첫 글자(없으면 코드 첫 글자, 그래도 없으면 '?') — 다른 화면(BotView)과 동일 스타일
+const logoChar = computed(() => {
+  const name = company.value?.name
+  const sym = company.value?.symbol
+  return (name?.charAt(0) || sym?.charAt(0) || '?').toUpperCase()
+})
 
 const toggleFavorite = () => {
   isFavorite.value = !isFavorite.value
@@ -29,160 +46,631 @@ const aiSubTabs = [
   { key: 'timeseries', label: '시계열' }
 ]
 
-const aiAnalysis = ref({
-  score: 92,
-  rating: 'A+',
-  recommendation: '매수',
-  reasons: [
-    '높은 성장 잠재력과 안정적인 수익 구조',
-    '업계 평균 대비 우수한 재무 지표',
-    '최근 3개월 긍정적인 시장 반응'
-  ],
-  strengths: [
-    { title: '재무 안정성', score: 95 },
-    { title: '성장성', score: 88 },
-    { title: '수익성', score: 93 }
-  ],
-  warnings: [
-    '단기 변동성 주의',
-    '글로벌 경기 둔화 영향 가능성'
-  ]
-})
+// ===== 기본정보 / 재무제표 / 공시정보 탭 상태 (탭 활성화 시 lazy fetch + 캐시) =====
+const basicInfo = ref(null)
+const basicLoading = ref(false)
+const basicError = ref(false)
+const basicLoaded = ref(false)
+// 데이터 미연동 등 사유 안내 (백엔드 data.notice). null/빈 문자열이면 미표시
+const basicNotice = ref(null)
 
-const financialData = ref({
-  annual: [
-    { year: '2024', revenue: 302840, operatingProfit: 45680, netProfit: 35920, eps: 4850 },
-    { year: '2023', revenue: 280150, operatingProfit: 42300, netProfit: 32100, eps: 4320 },
-    { year: '2022', revenue: 265800, operatingProfit: 38900, netProfit: 29500, eps: 3980 }
-  ],
-  ratios: [
-    { label: 'ROE', value: 18.5, unit: '%', good: true },
-    { label: 'ROA', value: 12.3, unit: '%', good: true },
-    { label: 'PER', value: 15.2, unit: '배', good: true },
-    { label: 'PBR', value: 2.8, unit: '배', good: true },
-    { label: '부채비율', value: 45.6, unit: '%', good: true },
-    { label: '유동비율', value: 185.3, unit: '%', good: true }
-  ]
-})
+const financials = ref(null)
+const financialLoading = ref(false)
+const financialError = ref(false)
+const financialLoaded = ref(false)
+const financialNotice = ref(null)
 
-const disclosures = ref([
-  {
-    id: 1,
-    type: '공정공시',
-    title: '2024년 4분기 실적발표 (잠정)',
-    date: '2025-01-15',
-    important: true
-  },
-  {
-    id: 2,
-    type: '주요사항보고',
-    title: '자기주식 취득 결정',
-    date: '2025-01-10',
-    important: false
-  },
-  {
-    id: 3,
-    type: '정기공시',
-    title: '분기보고서 (2024.09)',
-    date: '2024-11-14',
-    important: false
-  },
-  {
-    id: 4,
-    type: '공정공시',
-    title: '신규 사업 진출 계획',
-    date: '2024-11-05',
-    important: true
-  },
-  {
-    id: 5,
-    type: '주요사항보고',
-    title: '배당 결정',
-    date: '2024-10-28',
-    important: false
-  },
-  {
-    id: 6,
-    type: '공정공시',
-    title: '대규모 설비투자 계획',
-    date: '2024-10-15',
-    important: true
-  }
-])
-
-// AI 분석 데이터
-const quantAnalysis = ref({
-  stats: [
-    { label: '외국인\n순매수', value: '+2,840억', class: 'up' },
-    { label: '기관\n순매수', value: '+620억', class: 'up' },
-    { label: '거래량\n배율', value: '3.2x', class: 'yw' },
-    { label: '종가\n위치', value: '0.74', class: 'nt' }
-  ],
-  kisFeatures: [
-    { label: '외국인 순매수', source: 'KIS 수급', value: '+2,840억', percent: 88, class: 'up' },
-    { label: '기관 순매수', source: 'KIS 수급', value: '+620억', percent: 42, class: 'yw' },
-    { label: '장초반 수익률', source: 'KIS 가격', value: '+0.82%', percent: 60, class: 'nt' },
-    { label: '종가 위치', source: 'KIS 가격', value: '0.74', percent: 74, class: 'purple' }
-  ],
-  dartMetrics: [
-    { label: 'PER', value: '38.7', class: 'up' },
-    { label: 'ROE (%)', value: '18.5%', class: 'nt' },
-    { label: '영업이익률', value: '19.8%', class: 'yw' }
-  ]
-})
-
-const sentimentAnalysis = ref({
-  stockSentiment: { score: 0.44, label: '긍정', newsCount: 5 },
-  marketSentiment: { score: 0.28, label: '긍정 우세', newsCount: 24 },
-  difference: 0.16,
-  stockNewsRange: '전날 18:00 — 당일 08:50',
-  marketDistribution: { positive: 57, neutral: 30, negative: 13 },
-  marketSources: '한경 · 매경 · 연합뉴스'
-})
-
-const timeseriesAnalysis = ref({
-  stats: [
-    { label: 'price\ntrend', value: '+0.31', class: 'up' },
-    { label: 'volume\ntrend', value: '+0.18', class: 'up' },
-    { label: 'uncertainty', value: '2.4%', class: 'yw' },
-    { label: '학습\n거래일', value: '120일', class: 'nt' }
-  ],
-  features: [
-    { label: '가격 추세', source: 'price_trend', value: '+0.31', percent: 62, class: 'up' },
-    { label: '거래량 추세', source: 'vol_trend', value: '+0.18', percent: 36, class: 'yw' },
-    { label: '예측 불확실성', source: 'uncertainty', value: '2.4%', percent: 24, class: 'nt' }
-  ],
-  forecasts: [
-    { day: 'D+1', yhat: '178,200', upper: '181,400', lower: '175,100', uncertainty: '1.8%' },
-    { day: 'D+2', yhat: '179,800', upper: '184,200', lower: '175,500', uncertainty: '2.1%' },
-    { day: 'D+3', yhat: '181,400', upper: '187,800', lower: '175,200', uncertainty: '2.8%' },
-    { day: 'D+4', yhat: '182,900', upper: '190,400', lower: '175,600', uncertainty: '2.7%' },
-    { day: 'D+5', yhat: '184,500', upper: '193,200', lower: '176,000', uncertainty: '2.9%' }
-  ]
-})
+const disclosureData = ref(null)
+const disclosureLoading = ref(false)
+const disclosureError = ref(false)
+const disclosureLoaded = ref(false)
+const disclosureNotice = ref(null)
 
 const formatNumber = (num) => {
+  if (num === null || num === undefined || Number.isNaN(Number(num))) return '-'
   return new Intl.NumberFormat('ko-KR').format(num)
 }
 
+// ===== 프레젠테이션 헬퍼 (raw number → 화면 표시) =====
+
+// 색상 토큰: 양수 → up(빨강, 한국식 상승), 음수 → dn(파랑), 0 근처 → nt
+const toneBySign = (value, eps = 0) => {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return 'nt'
+  const n = Number(value)
+  if (n > eps) return 'up'
+  if (n < -eps) return 'dn'
+  return 'nt'
+}
+
+// 원화 금액 → "+2,840억" / "-1.2조" 형태
+const formatMoney = (won) => {
+  if (won === null || won === undefined || Number.isNaN(Number(won))) return '-'
+  const n = Number(won)
+  const sign = n > 0 ? '+' : n < 0 ? '-' : ''
+  const abs = Math.abs(n)
+  const JO = 1e12
+  const EOK = 1e8
+  if (abs >= JO) {
+    const v = abs / JO
+    return `${sign}${(Math.round(v * 10) / 10).toLocaleString('ko-KR')}조`
+  }
+  if (abs >= EOK) {
+    const v = Math.round(abs / EOK)
+    return `${sign}${v.toLocaleString('ko-KR')}억`
+  }
+  return `${sign}${formatNumber(abs)}`
+}
+
+// 부호 포함 고정 소수 (감성/추세 점수 표시용)
+const signedFixed = (value, digits = 2) => {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '-'
+  const n = Number(value)
+  const sign = n > 0 ? '+' : ''
+  return `${sign}${n.toFixed(digits)}`
+}
+
+// 0~100 클램프 (바 너비)
+const clampPercent = (value) => {
+  const n = Number(value)
+  if (Number.isNaN(n)) return 0
+  return Math.max(0, Math.min(100, Math.round(n)))
+}
+
+// 순매수 금액(원) → 바 너비: 5000억을 100% 기준으로 정규화
+const moneyToPercent = (won) => clampPercent((Math.abs(Number(won) || 0) / 5e11) * 100)
+
+// ===== 정량분석 (computed) =====
+const quantAnalysis = computed(() => {
+  const q = stockDetail.value?.quant
+  if (!q) return null
+  const fmtPct = (v, digits = 2) =>
+    v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : `${signedFixed(v, digits)}%`
+  const fmtRatio = (v, suffix = '') =>
+    v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : `${Number(v).toFixed(1)}${suffix}`
+  return {
+    stats: [
+      { label: '외국인\n순매수', value: formatMoney(q.foreign_net_buy), class: toneBySign(q.foreign_net_buy) },
+      { label: '기관\n순매수', value: formatMoney(q.institutional_net_buy), class: toneBySign(q.institutional_net_buy) },
+      {
+        label: '거래량\n배율',
+        value: q.vol_avg_multiple != null ? `${Number(q.vol_avg_multiple).toFixed(1)}x` : '-',
+        class: 'yw'
+      },
+      {
+        label: '종가\n위치',
+        value: q.close_position != null ? Number(q.close_position).toFixed(2) : '-',
+        class: 'nt'
+      }
+    ],
+    kisFeatures: [
+      {
+        label: '외국인 순매수',
+        source: 'KIS 수급',
+        value: formatMoney(q.foreign_net_buy),
+        percent: moneyToPercent(q.foreign_net_buy),
+        class: toneBySign(q.foreign_net_buy)
+      },
+      {
+        label: '기관 순매수',
+        source: 'KIS 수급',
+        value: formatMoney(q.institutional_net_buy),
+        percent: moneyToPercent(q.institutional_net_buy),
+        class: toneBySign(q.institutional_net_buy)
+      },
+      {
+        label: '장초반 수익률',
+        source: 'KIS 가격',
+        value: fmtPct(q.morning_return),
+        // 장초반 수익률(%)을 ±3% 구간으로 정규화(±3% 이상이면 가득)
+        percent: clampPercent((Math.abs(Number(q.morning_return) || 0) / 3) * 100),
+        class: toneBySign(q.morning_return)
+      },
+      {
+        label: '종가 위치',
+        source: 'KIS 가격',
+        value: q.close_position != null ? Number(q.close_position).toFixed(2) : '-',
+        percent: clampPercent((Number(q.close_position) || 0) * 100),
+        class: 'purple'
+      }
+    ],
+    dartMetrics: [
+      { label: 'PER', value: q.per != null ? Number(q.per).toFixed(1) : '-', class: 'up' },
+      { label: 'ROE (%)', value: fmtRatio(q.roe, '%'), class: 'nt' },
+      { label: '영업이익률', value: fmtRatio(q.operating_margin, '%'), class: 'yw' }
+    ]
+  }
+})
+
+// ===== 감성분석 (computed) =====
+const sentimentLabel = (score) => {
+  const n = Number(score) || 0
+  if (n >= 0.05) return '긍정'
+  if (n <= -0.05) return '부정'
+  return '중립'
+}
+
+// 감성 점수(-1~1) → 색상 토큰: 긍정 up(빨강), 부정 dn(파랑), 중립 nt
+const sentimentTone = (score) => {
+  const n = Number(score) || 0
+  if (n >= 0.05) return 'up'
+  if (n <= -0.05) return 'dn'
+  return 'nt'
+}
+
+// 감성 배지 색상 클래스
+const sentimentBadgeClass = (score) => {
+  const n = Number(score) || 0
+  if (n >= 0.05) return 'positive'
+  if (n <= -0.05) return 'negative'
+  return 'neutral'
+}
+
+const sentimentAnalysis = computed(() => {
+  const s = stockDetail.value?.sentiment
+  if (!s) return null
+  const dist = s.market_distribution || {}
+  const difference = (Number(s.stock_sentiment_score) || 0) - (Number(s.market_sentiment_score) || 0)
+  return {
+    stockSentiment: {
+      score: Number(s.stock_sentiment_score) || 0,
+      label: sentimentLabel(s.stock_sentiment_score),
+      tone: sentimentTone(s.stock_sentiment_score),
+      badge: sentimentBadgeClass(s.stock_sentiment_score),
+      newsCount: s.stock_news_count ?? 0
+    },
+    marketSentiment: {
+      score: Number(s.market_sentiment_score) || 0,
+      label: `${sentimentLabel(s.market_sentiment_score)} 우세`,
+      tone: sentimentTone(s.market_sentiment_score),
+      badge: sentimentBadgeClass(s.market_sentiment_score),
+      newsCount: s.market_news_count ?? 0
+    },
+    difference,
+    differenceTone: toneBySign(difference),
+    // 척도 바 위치(%): score -1..+1 → 0..100, 마커가 바를 벗어나지 않도록 4~96%로 클램프
+    stockMarkerLeft: Math.max(4, Math.min(96, 50 + (Number(s.stock_sentiment_score) || 0) * 50)),
+    marketMarkerLeft: Math.max(4, Math.min(96, 50 + (Number(s.market_sentiment_score) || 0) * 50)),
+    stockNewsRange: s.time_range || '-',
+    marketDistribution: {
+      positive: dist.positive_percent ?? 0,
+      neutral: dist.neutral_percent ?? 0,
+      negative: dist.negative_percent ?? 0,
+      positiveCount: dist.positive_count ?? 0,
+      neutralCount: dist.neutral_count ?? 0,
+      negativeCount: dist.negative_count ?? 0
+    },
+    marketSources: s.market_sources || '-'
+  }
+})
+
+// ===== 시계열 (computed) =====
+// 백엔드 주의: price_trend / volume_trend 는 "원/day 슬로프"(사용자 표시 부적합),
+// price_uncertainty 는 0~1 비율이 아니라 원 단위 밴드폭(최대 수백)이다.
+// 따라서 화면에는 raw 슬로프/밴드 대신 forecasts 기반 파생 지표(예상 수익률 %, 평균 불확실성 %)를 표시한다.
+const timeseriesAnalysis = computed(() => {
+  const t = stockDetail.value?.timeseries
+  if (!t) return null
+  const priceTrend = Number(t.price_trend) || 0
+  const volumeTrend = Number(t.volume_trend) || 0
+  const rawForecasts = Array.isArray(t.forecasts) ? t.forecasts : []
+
+  // 유효 yhat 만 추려 D+1 → D+N 예상 수익률 계산
+  const valid = rawForecasts.filter((f) => Number.isFinite(Number(f.yhat)))
+  const firstYhat = valid.length ? Number(valid[0].yhat) : null
+  const lastYhat = valid.length ? Number(valid[valid.length - 1].yhat) : null
+  const expectedReturn =
+    firstYhat && firstYhat !== 0 ? ((lastYhat - firstYhat) / firstYhat) * 100 : null
+
+  // forecasts.uncertainty_pct 는 이미 진짜 % (예: 3.5). 평균을 신뢰도 지표로 사용.
+  const uncPcts = valid
+    .map((f) => Number(f.uncertainty_pct))
+    .filter((v) => Number.isFinite(v))
+  const avgUncertaintyPct = uncPcts.length
+    ? uncPcts.reduce((a, b) => a + b, 0) / uncPcts.length
+    : null
+
+  return {
+    stats: [
+      {
+        label: 'D+1→D+5\n예상수익',
+        value: expectedReturn != null ? `${signedFixed(expectedReturn, 1)}%` : '-',
+        class: toneBySign(expectedReturn)
+      },
+      {
+        label: '가격\n추세',
+        value: priceTrend > 0 ? '상승' : priceTrend < 0 ? '하락' : '보합',
+        class: toneBySign(priceTrend)
+      },
+      {
+        label: '예측\n불확실성',
+        value: avgUncertaintyPct != null ? `${avgUncertaintyPct.toFixed(1)}%` : '-',
+        class: 'yw'
+      },
+      {
+        label: '학습\n거래일',
+        value: t.training_days != null ? `${t.training_days}일` : '-',
+        class: 'nt'
+      }
+    ],
+    features: [
+      {
+        label: '가격 추세',
+        source: 'price_trend',
+        value: priceTrend > 0 ? '상승 ▲' : priceTrend < 0 ? '하락 ▼' : '보합',
+        // 슬로프 절대크기는 의미가 약하므로 방향 신호로 고정 폭(상승/하락 60%, 보합 8%)
+        percent: priceTrend === 0 ? 8 : 60,
+        class: toneBySign(priceTrend)
+      },
+      {
+        label: '거래량 추세',
+        source: 'vol_trend',
+        value: volumeTrend > 0 ? '증가 ▲' : volumeTrend < 0 ? '감소 ▼' : '보합',
+        percent: volumeTrend === 0 ? 8 : 60,
+        class: toneBySign(volumeTrend)
+      },
+      {
+        label: '예측 불확실성',
+        source: 'avg %',
+        value: avgUncertaintyPct != null ? `${avgUncertaintyPct.toFixed(1)}%` : '-',
+        // 불확실성 %를 0~10% 구간으로 정규화(10% 이상이면 가득)
+        percent: avgUncertaintyPct != null ? clampPercent(avgUncertaintyPct * 10) : 0,
+        class: 'nt'
+      }
+    ],
+    forecasts: valid.map((f) => ({
+      day: f.day,
+      yhat: formatNumber(Math.round(Number(f.yhat))),
+      upper: f.yhat_upper != null ? formatNumber(Math.round(Number(f.yhat_upper))) : '-',
+      lower: f.yhat_lower != null ? formatNumber(Math.round(Number(f.yhat_lower))) : '-',
+      uncertainty: f.uncertainty_pct != null ? `${Number(f.uncertainty_pct).toFixed(1)}%` : '-'
+    })),
+    // 종합 추세 판단
+    priceUp: priceTrend >= 0,
+    volumeUp: volumeTrend >= 0,
+    // 평균 불확실성 3% 미만이면 양호, 이상이면 주의 (값 없으면 주의)
+    confidenceGood: avgUncertaintyPct != null && avgUncertaintyPct < 3
+  }
+})
+
+// ===== 시계열 예측 차트 geometry (실제 forecasts 로 SVG 좌표 계산) =====
+// viewBox 비율을 렌더 박스(약 320×150)와 맞추고 preserveAspectRatio 기본값 유지 → 선명/비왜곡
+const FORECAST_CHART = { w: 320, h: 150, padX: 16, padTop: 14, padBottom: 18 }
+
+const forecastChart = computed(() => {
+  const valid = (timeseriesAnalysis.value && stockDetail.value?.timeseries?.forecasts
+    ? stockDetail.value.timeseries.forecasts
+    : []
+  ).filter((f) => Number.isFinite(Number(f.yhat)))
+  if (valid.length < 2) return null
+
+  const { w, h, padX, padTop, padBottom } = FORECAST_CHART
+  const innerW = w - padX * 2
+  const innerH = h - padTop - padBottom
+
+  // y 범위: lower..upper 전체의 min/max (없으면 yhat 사용)
+  const lows = valid.map((f) => Number(f.yhat_lower ?? f.yhat))
+  const highs = valid.map((f) => Number(f.yhat_upper ?? f.yhat))
+  let minY = Math.min(...lows)
+  let maxY = Math.max(...highs)
+  if (!Number.isFinite(minY) || !Number.isFinite(maxY)) return null
+  if (minY === maxY) {
+    // 평평한 경우 약간의 여백
+    minY -= 1
+    maxY += 1
+  }
+  const xAt = (i) => padX + (valid.length === 1 ? innerW / 2 : (innerW * i) / (valid.length - 1))
+  const yAt = (val) => padTop + innerH - ((val - minY) / (maxY - minY)) * innerH
+
+  const yhatPts = valid.map((f, i) => `${xAt(i).toFixed(1)},${yAt(Number(f.yhat)).toFixed(1)}`)
+  // 신뢰구간 영역: upper(좌→우) + lower(우→좌)
+  const upperPts = valid.map((f, i) => `${xAt(i).toFixed(1)},${yAt(Number(f.yhat_upper ?? f.yhat)).toFixed(1)}`)
+  const lowerPtsRev = valid
+    .map((f, i) => `${xAt(i).toFixed(1)},${yAt(Number(f.yhat_lower ?? f.yhat)).toFixed(1)}`)
+    .reverse()
+  const hasBand = valid.some((f) => f.yhat_upper != null && f.yhat_lower != null)
+
+  return {
+    width: w,
+    height: h,
+    line: yhatPts.join(' '),
+    band: hasBand ? [...upperPts, ...lowerPtsRev].join(' ') : null,
+    dots: valid.map((f, i) => ({ x: xAt(i), y: yAt(Number(f.yhat)) })),
+    labels: valid.map((f, i) => ({ x: xAt(i), text: f.day }))
+  }
+})
+
+// ===== 정량 피처 막대 차트 geometry (4개 KIS 스탯의 상대 막대) =====
+const QUANT_CHART = { w: 320, h: 150, padX: 14, padTop: 16, padBottom: 26, gap: 14 }
+
+const quantChart = computed(() => {
+  const q = stockDetail.value?.quant
+  if (!q) return null
+  // 0~1 로 정규화된 4개 막대 (각 피처의 의미 있는 기준으로 스케일)
+  const bars = [
+    {
+      label: '외국인',
+      norm: Math.min(1, Math.abs(Number(q.foreign_net_buy) || 0) / 5e11),
+      color: (Number(q.foreign_net_buy) || 0) >= 0 ? '#F87171' : '#60A5FA'
+    },
+    {
+      label: '기관',
+      norm: Math.min(1, Math.abs(Number(q.institutional_net_buy) || 0) / 5e11),
+      color: (Number(q.institutional_net_buy) || 0) >= 0 ? '#F87171' : '#60A5FA'
+    },
+    {
+      label: '거래량',
+      // 거래량 배율: 1x=기준, 3x 이상이면 가득
+      norm: Math.min(1, (Number(q.vol_avg_multiple) || 0) / 3),
+      color: '#FBBF24'
+    },
+    {
+      label: '종가위치',
+      // 0~1 값 그대로
+      norm: Math.min(1, Math.max(0, Number(q.close_position) || 0)),
+      color: '#A78BFA'
+    }
+  ]
+  const { w, h, padX, padTop, padBottom, gap } = QUANT_CHART
+  const innerW = w - padX * 2
+  const innerH = h - padTop - padBottom
+  const barW = (innerW - gap * (bars.length - 1)) / bars.length
+  return {
+    width: w,
+    height: h,
+    baseline: h - padBottom,
+    bars: bars.map((b, i) => {
+      const bh = Math.max(2, b.norm * innerH)
+      return {
+        x: padX + i * (barW + gap),
+        y: padTop + innerH - bh,
+        w: barW,
+        h: bh,
+        color: b.color,
+        label: b.label,
+        labelX: padX + i * (barW + gap) + barW / 2
+      }
+    })
+  }
+})
+
+// ===== 기본정보 (computed) =====
+// YYYYMMDD -> YYYY-MM-DD (이미 포맷된 값/빈 값은 그대로 통과)
+const formatDate = (raw) => {
+  if (!raw) return null
+  const s = String(raw)
+  if (/^\d{8}$/.test(s)) return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`
+  return s
+}
+
+// KIS 숫자 필드: null -> '—', 그 외 단위 포맷
+const numOrDash = (v, unit = '') => {
+  if (v === null || v === undefined || Number.isNaN(Number(v))) return '—'
+  return `${formatNumber(v)}${unit}`
+}
+const ratioOrDash = (v, suffix = '') => {
+  if (v === null || v === undefined || Number.isNaN(Number(v))) return '—'
+  return `${Number(v).toFixed(2)}${suffix}`
+}
+
+const basicView = computed(() => {
+  const b = basicInfo.value
+  if (!b) return null
+  // DART 출처(선택적) 행: null 이면 숨김
+  const optionalRows = [
+    { label: '기업명(영문)', value: b.stock_name_en },
+    { label: '주소', value: b.address },
+    { label: '대표자', value: b.ceo_name },
+    { label: '설립일', value: formatDate(b.established_date) }
+  ].filter((row) => row.value)
+  return {
+    homepage: b.homepage || null,
+    optionalRows,
+    sector: b.sector || '제공 안 함',
+    marketCap: b.market_cap != null ? formatMoney(b.market_cap) : '—',
+    listedShares: numOrDash(b.listed_shares, '주'),
+    currentPrice: numOrDash(b.current_price, '원'),
+    changeRate: b.change_rate,
+    changeRateText:
+      b.change_rate === null || b.change_rate === undefined || Number.isNaN(Number(b.change_rate))
+        ? null
+        : `${signedFixed(b.change_rate, 2)}%`,
+    changeRateClass: toneBySign(b.change_rate),
+    per: ratioOrDash(b.per, '배'),
+    pbr: ratioOrDash(b.pbr, '배'),
+    eps: numOrDash(b.eps, '원'),
+    bps: numOrDash(b.bps, '원'),
+    week52High: numOrDash(b.week52_high, '원'),
+    week52Low: numOrDash(b.week52_low, '원')
+  }
+})
+
+// ===== 재무제표 (computed) =====
+const financialView = computed(() => {
+  const f = financials.value
+  if (!f) return null
+  const r = f.ratios || {}
+  // good 규칙: 데이터 기반의 단순 휴리스틱 (값 없으면 neutral)
+  const ratioCard = (label, value, unit, isGood) => ({
+    label,
+    value: value === null || value === undefined || Number.isNaN(Number(value)) ? '—' : `${Number(value).toFixed(1)}${unit}`,
+    good: value !== null && value !== undefined && !Number.isNaN(Number(value)) ? isGood(Number(value)) : false
+  })
+  return {
+    annual: Array.isArray(f.annual) ? f.annual : [],
+    ratios: [
+      ratioCard('ROE', r.roe, '%', (v) => v > 10),
+      ratioCard('ROA', r.roa, '%', (v) => v > 5),
+      ratioCard('PER', r.per, '배', (v) => v < 20),
+      ratioCard('PBR', r.pbr, '배', (v) => v < 2),
+      ratioCard('부채비율', r.debt_ratio, '%', (v) => v < 100),
+      ratioCard('유동비율', r.current_ratio, '%', (v) => v > 100)
+    ]
+  }
+})
+
+// ===== 공시정보 (computed) =====
+const disclosureList = computed(() =>
+  Array.isArray(disclosureData.value?.disclosures) ? disclosureData.value.disclosures : []
+)
+
+// ===== 탭별 lazy 로더 (캐시: *Loaded 가 true 면 재요청 안 함) =====
+const loadBasicInfo = async () => {
+  if (basicLoaded.value || basicLoading.value) return
+  basicLoading.value = true
+  basicError.value = false
+  try {
+    const res = await companyApi.getBasicInfo(symbol.value)
+    if (res && res.success && res.data) {
+      basicInfo.value = res.data
+      basicNotice.value = res.data.notice || null
+      basicLoaded.value = true
+    } else {
+      basicError.value = true
+    }
+  } catch (error) {
+    console.error('기업 기본정보 조회 실패:', error)
+    basicError.value = true
+  } finally {
+    basicLoading.value = false
+  }
+}
+
+const loadFinancials = async () => {
+  if (financialLoaded.value || financialLoading.value) return
+  financialLoading.value = true
+  financialError.value = false
+  try {
+    const res = await companyApi.getFinancials(symbol.value)
+    if (res && res.success && res.data) {
+      financials.value = res.data
+      financialNotice.value = res.data.notice || null
+      financialLoaded.value = true
+    } else {
+      financialError.value = true
+    }
+  } catch (error) {
+    console.error('재무제표 조회 실패:', error)
+    financialError.value = true
+  } finally {
+    financialLoading.value = false
+  }
+}
+
+const loadDisclosures = async () => {
+  if (disclosureLoaded.value || disclosureLoading.value) return
+  disclosureLoading.value = true
+  disclosureError.value = false
+  try {
+    const res = await companyApi.getDisclosures(symbol.value)
+    if (res && res.success && res.data) {
+      disclosureData.value = res.data
+      disclosureNotice.value = res.data.notice || null
+      disclosureLoaded.value = true
+    } else {
+      disclosureError.value = true
+    }
+  } catch (error) {
+    console.error('공시정보 조회 실패:', error)
+    disclosureError.value = true
+  } finally {
+    disclosureLoading.value = false
+  }
+}
+
+// 상세 탭 캐시 초기화 (종목 변경 시)
+const resetDetailTabs = () => {
+  basicInfo.value = null
+  basicLoaded.value = false
+  basicError.value = false
+  basicNotice.value = null
+  financials.value = null
+  financialLoaded.value = false
+  financialError.value = false
+  financialNotice.value = null
+  disclosureData.value = null
+  disclosureLoaded.value = false
+  disclosureError.value = false
+  disclosureNotice.value = null
+}
+
+// 활성 탭에 맞는 데이터를 lazy 로드
+const ensureTabData = (tab) => {
+  if (tab === 'basic') loadBasicInfo()
+  else if (tab === 'financial') loadFinancials()
+  else if (tab === 'disclosure') loadDisclosures()
+}
+
+// 탭 전환 감지 → 해당 탭 데이터 lazy fetch
+watch(activeTab, (tab) => ensureTabData(tab))
+
+const loadStockDetail = async () => {
+  aiLoading.value = true
+  aiError.value = false
+  stockDetail.value = null
+  // 헤더 정체성(종목명/코드)은 항상 실제 종목을 반영한다.
+  // 코드는 언제나 route symbol, 이름은 로딩/에러/무분석 동안 route symbol 로 폴백 ("아마존" 금지)
+  company.value = {
+    ...company.value,
+    name: symbol.value,
+    symbol: symbol.value
+  }
+  try {
+    const res = await marketAnalysisApi.getStockDetail(symbol.value)
+    if (res && res.success && res.data) {
+      stockDetail.value = res.data
+      // 응답이 있으면 실제 종목명으로 갱신 (이름 없으면 route symbol 유지)
+      company.value = {
+        ...company.value,
+        name: res.data.stock_name || symbol.value,
+        symbol: symbol.value
+      }
+    } else {
+      aiError.value = true
+    }
+  } catch (error) {
+    console.error('종목 상세 분석 조회 실패:', error)
+    aiError.value = true
+  } finally {
+    aiLoading.value = false
+  }
+}
+
 const goToNews = () => {
-  router.push(`/news?symbol=${company.value.symbol}`)
+  router.push(`/news?symbol=${symbol.value}`)
 }
 
 const goToTrade = () => {
-  router.push(`/trading/${company.value.symbol}`)
+  router.push(`/trading/${symbol.value}`)
 }
 
 onMounted(() => {
-  // Fetch company data based on route.params.symbol
-
   // Check if AI analysis tab should be shown
   if (route.query.showAiAnalysis === 'true') {
     activeTab.value = 'ai'
     // Remove query parameter from URL
     router.replace({ query: {} })
   }
+
+  // Fetch real AI analysis for the routed stock symbol
+  loadStockDetail()
+
+  // 마운트 시 기본 탭이 AI 가 아닐 경우(예: 향후 진입 경로) 해당 탭 데이터 lazy 로드
+  ensureTabData(activeTab.value)
 })
+
+// /company/A -> /company/B 처럼 컴포넌트가 재사용될 때 onMounted 가 다시 호출되지 않으므로
+// route symbol 변경을 감지해 symbol ref 를 갱신하고 재조회한다 (초기 마운트 중복 호출 방지를 위해 immediate 미사용)
+watch(
+  () => route.params.symbol,
+  (newSymbol) => {
+    if (!newSymbol || newSymbol === symbol.value) return
+    symbol.value = newSymbol
+    loadStockDetail()
+    // 상세 탭 캐시 초기화 후 현재 활성 탭만 재조회
+    resetDetailTabs()
+    ensureTabData(activeTab.value)
+  }
+)
 </script>
 
 <template>
@@ -193,11 +681,7 @@ onMounted(() => {
       <!-- Company Header -->
       <div class="company-header">
         <div class="company-logo">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-            <line x1="9" y1="9" x2="15" y2="9"/>
-            <line x1="9" y1="15" x2="15" y2="15"/>
-          </svg>
+          <span class="logo-char">{{ logoChar }}</span>
         </div>
         <div class="company-info">
           <span class="company-name">{{ company.name }}</span>
@@ -226,68 +710,81 @@ onMounted(() => {
 
       <!-- Basic Info Tab -->
       <div v-if="activeTab === 'basic'" class="tab-content">
-        <!-- Score Gauges -->
-        <div class="score-grid">
-          <div v-for="(score, key) in company.scores" :key="key" class="score-item">
-            <div class="gauge">
-              <svg viewBox="0 0 100 100">
-                <circle cx="50" cy="50" r="45" fill="none" stroke="#E5E7EB" stroke-width="8"/>
-                <circle
-                  cx="50" cy="50" r="45"
-                  fill="none"
-                  stroke="#F59E0B"
-                  stroke-width="8"
-                  :stroke-dasharray="`${score * 2.83} 283`"
-                  transform="rotate(-90 50 50)"
-                />
-              </svg>
-              <span class="gauge-label">{{ key.toUpperCase() }}</span>
-              <span class="gauge-value">{{ score }}</span>
-            </div>
-          </div>
+        <!-- 데이터 미연동 안내 배너 (기존 콘텐츠 위에 함께 표시) -->
+        <div v-if="basicNotice" class="notice-banner">
+          <svg class="notice-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="16" x2="12" y2="12" />
+            <line x1="12" y1="8" x2="12.01" y2="8" />
+          </svg>
+          <span class="notice-text">{{ basicNotice }}</span>
+        </div>
+
+        <!-- 로딩 -->
+        <div v-if="basicLoading" class="ai-state-message">불러오는 중...</div>
+
+        <!-- 에러 -->
+        <div v-else-if="basicError" class="ai-state-message">
+          기본정보를 불러올 수 없습니다.
         </div>
 
         <!-- Company Info Card -->
-        <div class="info-card">
-          <div class="info-row">
-            <span class="info-label">기업명</span>
-            <span class="info-value">{{ company.nameEn }}</span>
+        <div v-else-if="basicView" class="info-card">
+          <!-- DART 출처 선택적 행 (값 없으면 행 자체를 숨김) -->
+          <div v-for="row in basicView.optionalRows" :key="row.label" class="info-row">
+            <span class="info-label">{{ row.label }}</span>
+            <span class="info-value">{{ row.value }}</span>
           </div>
-          <div class="info-row">
-            <span class="info-label">주소</span>
-            <span class="info-value">{{ company.address }}</span>
-          </div>
-          <div class="info-row">
+          <div v-if="basicView.homepage" class="info-row">
             <span class="info-label">홈페이지</span>
-            <a class="info-value link" :href="company.website" target="_blank">{{ company.website }}</a>
+            <a class="info-value link" :href="basicView.homepage" target="_blank">{{ basicView.homepage }}</a>
           </div>
           <div class="info-row">
-            <span class="info-label">섹터</span>
-            <span class="info-value">{{ company.sector }}</span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">직원수</span>
-            <span class="info-value">{{ formatNumber(company.employees) }}</span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">주식수</span>
-            <span class="info-value">{{ formatNumber(company.shares) }}</span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">재무통화</span>
-            <span class="info-value">{{ company.currency }}</span>
+            <span class="info-label">섹터/업종</span>
+            <span class="info-value">{{ basicView.sector }}</span>
           </div>
           <div class="info-row">
             <span class="info-label">시가총액</span>
-            <span class="info-value">{{ formatNumber(company.marketCap) }}</span>
+            <span class="info-value">{{ basicView.marketCap }}</span>
           </div>
           <div class="info-row">
-            <span class="info-label">배당</span>
-            <span class="info-value">{{ company.dividend }}</span>
+            <span class="info-label">상장주식수</span>
+            <span class="info-value">{{ basicView.listedShares }}</span>
           </div>
-          <div class="info-row full">
-            <span class="info-label">개요</span>
-            <p class="info-desc">{{ company.description }}</p>
+          <div class="info-row">
+            <span class="info-label">현재가</span>
+            <span class="info-value">
+              {{ basicView.currentPrice }}
+              <span
+                v-if="basicView.changeRateText"
+                class="change-rate"
+                :class="basicView.changeRateClass"
+              >({{ basicView.changeRateText }})</span>
+            </span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">PER</span>
+            <span class="info-value">{{ basicView.per }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">PBR</span>
+            <span class="info-value">{{ basicView.pbr }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">EPS</span>
+            <span class="info-value">{{ basicView.eps }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">BPS</span>
+            <span class="info-value">{{ basicView.bps }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">52주 최고</span>
+            <span class="info-value">{{ basicView.week52High }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">52주 최저</span>
+            <span class="info-value">{{ basicView.week52Low }}</span>
           </div>
         </div>
       </div>
@@ -306,21 +803,56 @@ onMounted(() => {
           </button>
         </div>
 
+        <!-- 로딩 상태 -->
+        <div v-if="aiLoading" class="ai-state-message">불러오는 중...</div>
+
+        <!-- 분석 데이터 없음 / 에러 상태 -->
+        <div v-else-if="!hasAnalysis" class="ai-state-message">
+          이 종목은 AI 분석 데이터가 없습니다.
+        </div>
+
         <!-- 정량분석 -->
-        <div v-if="aiSubTab === 'quant'" class="ai-tab-sections">
+        <div v-else-if="aiSubTab === 'quant' && quantAnalysis" class="ai-tab-sections">
           <!-- KIS·DART 피처 분포 차트 -->
           <div class="ai-section">
             <div class="section-label">KIS · DART 피처 분포</div>
             <div class="analysis-card">
               <div class="chart-wrapper">
                 <div class="chart-placeholder">
-                  <svg width="100%" height="170" viewBox="0 0 100 50" preserveAspectRatio="none">
-                    <rect x="0" y="30" width="20" height="20" fill="#F87171" opacity="0.3"/>
-                    <rect x="25" y="20" width="20" height="30" fill="#60A5FA" opacity="0.3"/>
-                    <rect x="50" y="15" width="20" height="35" fill="#34D399" opacity="0.3"/>
-                    <rect x="75" y="25" width="20" height="25" fill="#FBBF24" opacity="0.3"/>
+                  <svg
+                    v-if="quantChart"
+                    class="chart-svg"
+                    :viewBox="`0 0 ${quantChart.width} ${quantChart.height}`"
+                    role="img"
+                    aria-label="KIS 피처 막대 차트"
+                  >
+                    <line
+                      :x1="0"
+                      :y1="quantChart.baseline"
+                      :x2="quantChart.width"
+                      :y2="quantChart.baseline"
+                      stroke="rgba(255,255,255,0.12)"
+                      stroke-width="1"
+                    />
+                    <g v-for="(bar, i) in quantChart.bars" :key="i">
+                      <rect
+                        :x="bar.x"
+                        :y="bar.y"
+                        :width="bar.w"
+                        :height="bar.h"
+                        :fill="bar.color"
+                        opacity="0.85"
+                        rx="3"
+                      />
+                      <text
+                        :x="bar.labelX"
+                        :y="quantChart.baseline + 14"
+                        text-anchor="middle"
+                        class="chart-axis-label"
+                      >{{ bar.label }}</text>
+                    </g>
                   </svg>
-                  <div class="chart-badge">KIS 4개 + DART 3개 피처</div>
+                  <div v-else class="chart-empty">차트 데이터 없음</div>
                 </div>
                 <div class="stat-row">
                   <div v-for="(stat, idx) in quantAnalysis.stats" :key="idx" class="stat-item">
@@ -371,7 +903,7 @@ onMounted(() => {
         </div>
 
         <!-- 감성분석 -->
-        <div v-else-if="aiSubTab === 'sentiment'" class="ai-tab-sections">
+        <div v-else-if="aiSubTab === 'sentiment' && sentimentAnalysis" class="ai-tab-sections">
           <!-- 감성점수 비교 -->
           <div class="ai-section">
             <div class="section-label">감성점수 비교</div>
@@ -380,23 +912,25 @@ onMounted(() => {
                 <div class="sentiment-box">
                   <div class="sentiment-header">종목 감성</div>
                   <div class="sentiment-meta">네이버금융 · {{ sentimentAnalysis.stockSentiment.newsCount }}건</div>
-                  <div class="sentiment-score up">{{ sentimentAnalysis.stockSentiment.score > 0 ? '+' : '' }}{{ sentimentAnalysis.stockSentiment.score }}</div>
-                  <div class="sentiment-badge positive">{{ sentimentAnalysis.stockSentiment.label }}</div>
+                  <div class="sentiment-score" :class="sentimentAnalysis.stockSentiment.tone">{{ signedFixed(sentimentAnalysis.stockSentiment.score) }}</div>
+                  <div class="sentiment-badge" :class="sentimentAnalysis.stockSentiment.badge">{{ sentimentAnalysis.stockSentiment.label }}</div>
                   <div class="sentiment-footer">시간 가중 평균</div>
                 </div>
                 <div class="sentiment-box">
                   <div class="sentiment-header">시장 전반</div>
-                  <div class="sentiment-meta">RSS 피드 · 3개 출처</div>
-                  <div class="sentiment-score up">{{ sentimentAnalysis.marketSentiment.score > 0 ? '+' : '' }}{{ sentimentAnalysis.marketSentiment.score }}</div>
-                  <div class="sentiment-badge positive">{{ sentimentAnalysis.marketSentiment.label }}</div>
+                  <div class="sentiment-meta">RSS 피드 · {{ sentimentAnalysis.marketSentiment.newsCount }}건</div>
+                  <div class="sentiment-score" :class="sentimentAnalysis.marketSentiment.tone">{{ signedFixed(sentimentAnalysis.marketSentiment.score) }}</div>
+                  <div class="sentiment-badge" :class="sentimentAnalysis.marketSentiment.badge">{{ sentimentAnalysis.marketSentiment.label }}</div>
                   <div class="sentiment-footer">시간 가중 평균</div>
                 </div>
               </div>
               <div class="sentiment-diff">
                 <div class="diff-label">종목 − 시장 전반</div>
-                <div class="diff-value">+{{ sentimentAnalysis.difference }} ↑</div>
+                <div class="diff-value" :class="sentimentAnalysis.differenceTone">{{ signedFixed(sentimentAnalysis.difference) }} {{ sentimentAnalysis.difference >= 0 ? '↑' : '↓' }}</div>
               </div>
-              <div class="diff-desc">시장 평균 대비 긍정 신호 우위</div>
+              <div class="diff-desc">
+                {{ sentimentAnalysis.difference >= 0 ? '시장 평균 대비 긍정 신호 우위' : '시장 평균 대비 부정 신호 우위' }}
+              </div>
             </div>
           </div>
 
@@ -404,7 +938,7 @@ onMounted(() => {
           <div class="ai-section">
             <div class="section-label">종목 감성 상세</div>
             <div class="analysis-card">
-              <div class="card-sublabel">stock_code = 000660 · news_analysis 테이블</div>
+              <div class="card-sublabel">stock_code = {{ company.symbol }} · news_analysis 테이블</div>
 
               <!-- 감성 척도 바 -->
               <div class="sentiment-scale">
@@ -416,16 +950,16 @@ onMounted(() => {
                 <div class="scale-bar">
                   <div
                     class="market-marker"
-                    :style="{ left: `calc(50% + ${sentimentAnalysis.marketSentiment.score / 2 * 100}%)` }"
+                    :style="{ left: `${sentimentAnalysis.marketMarkerLeft}%` }"
                   ></div>
                   <div
                     class="stock-marker"
-                    :style="{ left: `calc(50% + ${sentimentAnalysis.stockSentiment.score / 2 * 100}%)` }"
+                    :style="{ left: `${sentimentAnalysis.stockMarkerLeft}%` }"
                   ></div>
                 </div>
                 <div class="scale-legend">
-                  <span class="market-legend">▲ 시장 +{{ sentimentAnalysis.marketSentiment.score }}</span>
-                  <span class="stock-legend">● 종목 +{{ sentimentAnalysis.stockSentiment.score }}</span>
+                  <span class="market-legend">▲ 시장 {{ signedFixed(sentimentAnalysis.marketSentiment.score) }}</span>
+                  <span class="stock-legend">● 종목 {{ signedFixed(sentimentAnalysis.stockSentiment.score) }}</span>
                 </div>
               </div>
 
@@ -458,9 +992,9 @@ onMounted(() => {
                   <div class="dist-negative" :style="{ flex: sentimentAnalysis.marketDistribution.negative }"></div>
                 </div>
                 <div class="distribution-legend">
-                  <span class="legend-positive">긍정 17개 ({{ sentimentAnalysis.marketDistribution.positive }}%)</span>
-                  <span class="legend-neutral">중립 9개 ({{ sentimentAnalysis.marketDistribution.neutral }}%)</span>
-                  <span class="legend-negative">부정 4개 ({{ sentimentAnalysis.marketDistribution.negative }}%)</span>
+                  <span class="legend-positive">긍정 {{ sentimentAnalysis.marketDistribution.positiveCount }}개 ({{ sentimentAnalysis.marketDistribution.positive }}%)</span>
+                  <span class="legend-neutral">중립 {{ sentimentAnalysis.marketDistribution.neutralCount }}개 ({{ sentimentAnalysis.marketDistribution.neutral }}%)</span>
+                  <span class="legend-negative">부정 {{ sentimentAnalysis.marketDistribution.negativeCount }}개 ({{ sentimentAnalysis.marketDistribution.negative }}%)</span>
                 </div>
               </div>
 
@@ -480,28 +1014,56 @@ onMounted(() => {
         </div>
 
         <!-- 시계열 -->
-        <div v-else-if="aiSubTab === 'timeseries'" class="ai-tab-sections">
+        <div v-else-if="aiSubTab === 'timeseries' && timeseriesAnalysis" class="ai-tab-sections">
           <!-- Prophet 예측 차트 -->
           <div class="ai-section">
             <div class="section-label">Prophet D+1~D+5 가격 예측</div>
             <div class="analysis-card">
               <div class="chart-wrapper">
                 <div class="chart-placeholder">
-                  <svg width="100%" height="170" viewBox="0 0 100 50" preserveAspectRatio="none">
-                    <polyline
-                      points="0,40 20,35 40,30 60,25 80,20 100,15"
-                      fill="none"
-                      stroke="#60A5FA"
-                      stroke-width="0.5"
-                      opacity="0.5"
+                  <svg
+                    v-if="forecastChart"
+                    class="chart-svg"
+                    :viewBox="`0 0 ${forecastChart.width} ${forecastChart.height}`"
+                    role="img"
+                    aria-label="Prophet D+1~D+5 가격 예측 차트"
+                  >
+                    <!-- 신뢰구간 영역 (yhat_upper ~ yhat_lower) -->
+                    <polygon
+                      v-if="forecastChart.band"
+                      :points="forecastChart.band"
+                      fill="#60A5FA"
+                      opacity="0.15"
                     />
+                    <!-- yhat 예측선 -->
                     <polyline
-                      points="0,30 20,28 40,26 60,24 80,22 100,20"
+                      :points="forecastChart.line"
                       fill="none"
                       stroke="#F87171"
-                      stroke-width="1"
+                      stroke-width="2"
+                      stroke-linejoin="round"
+                      stroke-linecap="round"
                     />
+                    <!-- 데이터 포인트 -->
+                    <circle
+                      v-for="(d, i) in forecastChart.dots"
+                      :key="i"
+                      :cx="d.x"
+                      :cy="d.y"
+                      r="3"
+                      fill="#F87171"
+                    />
+                    <!-- x축 라벨 (D+1~D+5) -->
+                    <text
+                      v-for="(l, i) in forecastChart.labels"
+                      :key="`l${i}`"
+                      :x="l.x"
+                      :y="forecastChart.height - 4"
+                      text-anchor="middle"
+                      class="chart-axis-label"
+                    >{{ l.text }}</text>
                   </svg>
+                  <div v-else class="chart-empty">예측 데이터 부족</div>
                   <div class="chart-badge">Prophet · 120거래일 기반 · 신뢰구간 포함</div>
                 </div>
                 <div class="stat-row">
@@ -541,19 +1103,25 @@ onMounted(() => {
                 <div class="trend-summary-label">종합 추세 판단</div>
                 <div class="trend-cards">
                   <div class="trend-card">
-                    <div class="trend-emoji">📈</div>
+                    <div class="trend-emoji">{{ timeseriesAnalysis.priceUp ? '📈' : '📉' }}</div>
                     <div class="trend-label">가격</div>
-                    <div class="trend-value up">상승</div>
+                    <div class="trend-value" :class="timeseriesAnalysis.priceUp ? 'up' : 'nt'">
+                      {{ timeseriesAnalysis.priceUp ? '상승' : '하락' }}
+                    </div>
                   </div>
                   <div class="trend-card">
-                    <div class="trend-emoji">📈</div>
+                    <div class="trend-emoji">{{ timeseriesAnalysis.volumeUp ? '📈' : '📉' }}</div>
                     <div class="trend-label">거래량</div>
-                    <div class="trend-value up">증가</div>
+                    <div class="trend-value" :class="timeseriesAnalysis.volumeUp ? 'up' : 'nt'">
+                      {{ timeseriesAnalysis.volumeUp ? '증가' : '감소' }}
+                    </div>
                   </div>
                   <div class="trend-card">
-                    <div class="trend-emoji">🎯</div>
+                    <div class="trend-emoji">{{ timeseriesAnalysis.confidenceGood ? '🎯' : '⚠️' }}</div>
                     <div class="trend-label">신뢰도</div>
-                    <div class="trend-value nt">양호</div>
+                    <div class="trend-value" :class="timeseriesAnalysis.confidenceGood ? 'nt' : 'up'">
+                      {{ timeseriesAnalysis.confidenceGood ? '양호' : '주의' }}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -577,7 +1145,7 @@ onMounted(() => {
                 </div>
                 <div v-for="(forecast, idx) in timeseriesAnalysis.forecasts" :key="idx" class="forecast-row">
                   <div class="forecast-cell day">{{ forecast.day }}</div>
-                  <div class="forecast-cell">{{ forecast.yhat }}</div>
+                  <div class="forecast-cell yhat">{{ forecast.yhat }}</div>
                   <div class="forecast-cell up">{{ forecast.upper }}</div>
                   <div class="forecast-cell dn">{{ forecast.lower }}</div>
                   <div class="forecast-cell nt">{{ forecast.uncertainty }}</div>
@@ -590,7 +1158,25 @@ onMounted(() => {
 
       <!-- Financial Tab -->
       <div v-else-if="activeTab === 'financial'" class="tab-content">
-        <div class="financial-content">
+        <!-- 데이터 미연동 안내 배너 (기존 콘텐츠 위에 함께 표시) -->
+        <div v-if="financialNotice" class="notice-banner">
+          <svg class="notice-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="16" x2="12" y2="12" />
+            <line x1="12" y1="8" x2="12.01" y2="8" />
+          </svg>
+          <span class="notice-text">{{ financialNotice }}</span>
+        </div>
+
+        <!-- 로딩 -->
+        <div v-if="financialLoading" class="ai-state-message">불러오는 중...</div>
+
+        <!-- 에러 -->
+        <div v-else-if="financialError" class="ai-state-message">
+          재무 데이터를 불러올 수 없습니다.
+        </div>
+
+        <div v-else-if="financialView" class="financial-content">
           <!-- Financial Ratios -->
           <div class="financial-section">
             <h4 class="section-title">
@@ -600,10 +1186,10 @@ onMounted(() => {
               주요 재무비율
             </h4>
             <div class="ratios-grid">
-              <div v-for="(ratio, index) in financialData.ratios" :key="index" class="ratio-card">
+              <div v-for="(ratio, index) in financialView.ratios" :key="index" class="ratio-card">
                 <div class="ratio-label">{{ ratio.label }}</div>
                 <div class="ratio-value" :class="{ good: ratio.good }">
-                  {{ ratio.value }}{{ ratio.unit }}
+                  {{ ratio.value }}
                 </div>
               </div>
             </div>
@@ -617,7 +1203,13 @@ onMounted(() => {
               </svg>
               연간 실적 (단위: 억원)
             </h4>
-            <div class="financial-table">
+
+            <!-- 연간 실적 없음 -->
+            <div v-if="financialView.annual.length === 0" class="ai-state-message">
+              연간 실적 데이터가 없습니다.
+            </div>
+
+            <div v-else class="financial-table">
               <div class="table-header">
                 <div class="table-cell">연도</div>
                 <div class="table-cell">매출액</div>
@@ -625,11 +1217,11 @@ onMounted(() => {
                 <div class="table-cell">순이익</div>
                 <div class="table-cell">EPS</div>
               </div>
-              <div v-for="data in financialData.annual" :key="data.year" class="table-row">
+              <div v-for="data in financialView.annual" :key="data.year" class="table-row">
                 <div class="table-cell year">{{ data.year }}</div>
                 <div class="table-cell">{{ formatNumber(data.revenue) }}</div>
-                <div class="table-cell">{{ formatNumber(data.operatingProfit) }}</div>
-                <div class="table-cell">{{ formatNumber(data.netProfit) }}</div>
+                <div class="table-cell">{{ formatNumber(data.operating_profit) }}</div>
+                <div class="table-cell">{{ formatNumber(data.net_profit) }}</div>
                 <div class="table-cell">{{ formatNumber(data.eps) }}</div>
               </div>
             </div>
@@ -639,7 +1231,25 @@ onMounted(() => {
 
       <!-- Disclosure Tab -->
       <div v-else-if="activeTab === 'disclosure'" class="tab-content">
-        <div class="disclosure-content">
+        <!-- 데이터 미연동 안내 배너 (기존 콘텐츠 위에 함께 표시) -->
+        <div v-if="disclosureNotice" class="notice-banner">
+          <svg class="notice-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="16" x2="12" y2="12" />
+            <line x1="12" y1="8" x2="12.01" y2="8" />
+          </svg>
+          <span class="notice-text">{{ disclosureNotice }}</span>
+        </div>
+
+        <!-- 로딩 -->
+        <div v-if="disclosureLoading" class="ai-state-message">불러오는 중...</div>
+
+        <!-- 에러 -->
+        <div v-else-if="disclosureError" class="ai-state-message">
+          공시정보를 불러올 수 없습니다.
+        </div>
+
+        <div v-else class="disclosure-content">
           <div class="disclosure-section">
             <h4 class="section-title">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -647,9 +1257,15 @@ onMounted(() => {
               </svg>
               최근 공시
             </h4>
-            <div class="disclosure-list">
+
+            <!-- 공시 없음 -->
+            <div v-if="disclosureList.length === 0" class="ai-state-message">
+              최근 공시가 없습니다.
+            </div>
+
+            <div v-else class="disclosure-list">
               <div
-                v-for="disclosure in disclosures"
+                v-for="disclosure in disclosureList"
                 :key="disclosure.id"
                 class="disclosure-item"
                 :class="{ important: disclosure.important }"
@@ -704,7 +1320,7 @@ onMounted(() => {
   height: 56px;
   border-radius: var(--radius-lg);
   overflow: hidden;
-  background: linear-gradient(135deg, #1E293B 0%, #334155 100%);
+  background: linear-gradient(135deg, #10B981 0%, #059669 100%);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -712,8 +1328,11 @@ onMounted(() => {
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.company-logo svg {
-  color: var(--color-text-tertiary);
+.logo-char {
+  color: white;
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  line-height: 1;
 }
 
 .company-info {
@@ -778,57 +1397,6 @@ onMounted(() => {
   flex-shrink: 0;
 }
 
-.score-grid {
-  display: flex;
-  justify-content: space-around;
-  margin-bottom: var(--spacing-xl);
-  padding: var(--spacing-lg);
-  background: linear-gradient(135deg, rgba(79, 70, 229, 0.05) 0%, rgba(124, 58, 237, 0.05) 100%);
-  border-radius: var(--radius-lg);
-}
-
-.score-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--spacing-xs);
-}
-
-.gauge {
-  position: relative;
-  width: 70px;
-  height: 70px;
-}
-
-.gauge svg {
-  width: 100%;
-  height: 100%;
-}
-
-.gauge-label {
-  position: absolute;
-  top: 18px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 10px;
-  color: var(--color-text-tertiary);
-  font-weight: var(--font-weight-medium);
-  text-transform: uppercase;
-}
-
-.gauge-value {
-  position: absolute;
-  bottom: 18px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-bold);
-  background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
 .info-card {
   background: linear-gradient(135deg, #1E293B 0%, #334155 100%);
   border-radius: var(--radius-xl);
@@ -871,6 +1439,15 @@ onMounted(() => {
   word-break: break-all;
 }
 
+.change-rate {
+  margin-left: var(--spacing-xs);
+  font-weight: var(--font-weight-semibold);
+}
+
+.change-rate.up { color: #F87171; }
+.change-rate.dn { color: #60A5FA; }
+.change-rate.nt { color: #2DD4BF; }
+
 .info-value.link {
   color: #A78BFA;
   text-decoration: none;
@@ -894,6 +1471,30 @@ onMounted(() => {
   justify-content: center;
   min-height: 200px;
   color: var(--color-text-tertiary);
+}
+
+/* 데이터 미연동 안내 배너 (DART/실시간 KIS 미연동 등) */
+.notice-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-md) var(--spacing-lg);
+  margin-bottom: var(--spacing-lg);
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: var(--radius-lg);
+}
+
+.notice-banner .notice-icon {
+  color: #F59E0B;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.notice-banner .notice-text {
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  color: var(--color-text-secondary);
 }
 
 .action-buttons {
@@ -1398,6 +1999,17 @@ onMounted(() => {
   gap: var(--spacing-lg);
 }
 
+.ai-state-message {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  padding: var(--spacing-xl);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  text-align: center;
+}
+
 .ai-section {
   display: flex;
   flex-direction: column;
@@ -1450,6 +2062,28 @@ onMounted(() => {
   overflow: hidden;
 }
 
+/* viewBox 비율(320×150)을 그대로 유지 → 비왜곡/선명 렌더 */
+.chart-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.chart-axis-label {
+  fill: var(--color-text-tertiary);
+  font-size: 10px;
+  font-family: 'SF Mono', monospace;
+}
+
+.chart-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
 .chart-badge {
   position: absolute;
   top: 8px;
@@ -1476,6 +2110,7 @@ onMounted(() => {
   border-radius: var(--radius-md);
   padding: var(--spacing-sm) 4px;
   text-align: center;
+  min-width: 0;
 }
 
 .stat-label {
@@ -1486,9 +2121,12 @@ onMounted(() => {
 }
 
 .stat-value {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: var(--font-weight-bold);
   font-family: 'SF Mono', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .stat-value.up { color: #F87171; }
@@ -1517,19 +2155,26 @@ onMounted(() => {
 .feature-label {
   font-size: 10px;
   color: var(--color-text-secondary);
-  width: 100px;
+  width: 84px;
   flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .feature-source {
   font-size: 9px;
   color: var(--color-text-tertiary);
-  width: 50px;
+  width: 44px;
   flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .feature-bar-wrap {
   flex: 1;
+  min-width: 0;
   margin: 0 var(--spacing-xs);
 }
 
@@ -1556,9 +2201,12 @@ onMounted(() => {
   font-size: 11px;
   font-weight: var(--font-weight-bold);
   font-family: 'SF Mono', monospace;
-  width: 50px;
+  width: 62px;
   text-align: right;
   flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .feature-value.up { color: #F87171; }
@@ -1640,6 +2288,8 @@ onMounted(() => {
 }
 
 .sentiment-score.up { color: #F87171; }
+.sentiment-score.dn { color: #60A5FA; }
+.sentiment-score.nt { color: #2DD4BF; }
 
 .sentiment-badge {
   padding: 3px 10px;
@@ -1652,6 +2302,18 @@ onMounted(() => {
   background: rgba(248, 113, 113, 0.12);
   color: #F87171;
   border: 1px solid rgba(248, 113, 113, 0.2);
+}
+
+.sentiment-badge.negative {
+  background: rgba(96, 165, 250, 0.12);
+  color: #60A5FA;
+  border: 1px solid rgba(96, 165, 250, 0.2);
+}
+
+.sentiment-badge.neutral {
+  background: rgba(45, 212, 191, 0.12);
+  color: #2DD4BF;
+  border: 1px solid rgba(45, 212, 191, 0.2);
 }
 
 .sentiment-footer {
@@ -1679,8 +2341,12 @@ onMounted(() => {
   font-size: 12px;
   font-weight: var(--font-weight-bold);
   font-family: 'SF Mono', monospace;
-  color: #F87171;
+  color: var(--color-text-primary);
 }
+
+.diff-value.up { color: #F87171; }
+.diff-value.dn { color: #60A5FA; }
+.diff-value.nt { color: #2DD4BF; }
 
 .diff-desc {
   font-size: 10px;
@@ -1756,6 +2422,7 @@ onMounted(() => {
   border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: var(--radius-md);
   padding: var(--spacing-sm);
+  min-width: 0;
 }
 
 .meta-label {
@@ -1776,6 +2443,7 @@ onMounted(() => {
   color: var(--color-text-secondary);
   line-height: 1.4;
   margin-top: 2px;
+  overflow-wrap: anywhere;
 }
 
 .distribution-section {
@@ -1812,9 +2480,11 @@ onMounted(() => {
 .distribution-legend {
   display: flex;
   justify-content: space-between;
-  font-size: 9px;
+  gap: 4px;
+  font-size: 8.5px;
   margin-top: 5px;
   font-family: 'SF Mono', monospace;
+  white-space: nowrap;
 }
 
 .legend-positive { color: #F87171; }
@@ -1882,7 +2552,7 @@ onMounted(() => {
   display: flex;
   padding: 6px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  font-size: 9px;
+  font-size: 8.5px;
   color: var(--color-text-tertiary);
 }
 
@@ -1890,7 +2560,7 @@ onMounted(() => {
   display: flex;
   padding: 7px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  font-size: 11px;
+  font-size: 10.5px;
   font-family: 'SF Mono', monospace;
 }
 
@@ -1900,18 +2570,30 @@ onMounted(() => {
 
 .forecast-cell {
   flex: 1;
+  min-width: 0;
   text-align: right;
   color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-left: 2px;
 }
 
+/* 일자 열은 좁게 고정, 숫자 열에 여유 배분 */
 .forecast-cell:first-child {
+  flex: 0 0 38px;
   text-align: left;
+  padding-left: 0;
 }
 
 .forecast-cell.day {
   color: var(--color-text-tertiary);
 }
 
+.forecast-cell.yhat {
+  color: #F9FAFB;
+  font-weight: var(--font-weight-bold);
+}
 .forecast-cell.up { color: #F87171; }
 .forecast-cell.dn { color: #60A5FA; }
 .forecast-cell.nt { color: #2DD4BF; }
