@@ -25,6 +25,6 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 | [`_docs/PIPELINE_DESIGN.md`](_docs/PIPELINE_DESIGN.md) | Stage 0~6 기능 설계서 |
 | [`_docs/STATUS.md`](_docs/STATUS.md) | 구현 상태 · 갭 · 수정 이력 |
 | [`_docs/API_REFERENCE.md`](_docs/API_REFERENCE.md) | DB 스키마 · 조회 쿼리 |
-| [`_docs/USER_GUIDE.md`](_docs/USER_GUIDE.md) | 설치 · 실행 · 운영 |
+| [`_docs/USAGE.md`](_docs/USAGE.md) | 설치 · 실행 · 운영 |
 
 상세 아키텍처 가이드(Claude Code용)는 [`CLAUDE.md`](CLAUDE.md) 참고.

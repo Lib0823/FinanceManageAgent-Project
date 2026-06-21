@@ -1,4 +1,4 @@
-# USER_GUIDE — 설치 · 실행 · 운영
+# USAGE — 설치 · 실행 · 운영
 
 > 이 문서는 ai-agent를 **설치하고 실행·운영**하는 방법을 정리한다.
 > 구조는 [ARCHITECTURE.md](ARCHITECTURE.md), 파이프라인 설계는 [PIPELINE_DESIGN.md](PIPELINE_DESIGN.md), 진행 상황은 [STATUS.md](STATUS.md) 참고.

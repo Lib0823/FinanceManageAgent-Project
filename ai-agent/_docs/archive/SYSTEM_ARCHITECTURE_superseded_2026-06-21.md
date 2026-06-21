@@ -2,7 +2,7 @@
 
 > **용도**: AI 자동매매 시스템의 전체 구조 및 6단계 파이프라인 상세 이해
 > **대상**: 시스템 아키텍트, Backend/AI 개발자
-> **관련 문서**: `API_REFERENCE.md`, `USER_GUIDE.md`
+> **관련 문서**: `API_REFERENCE.md`, `USAGE.md`
 
 ---
 

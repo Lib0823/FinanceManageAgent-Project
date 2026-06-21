@@ -70,7 +70,7 @@ pytest tests/ -v                                       # 테스트
 curl -X POST http://localhost:8000/api/pipeline/trigger -H "Content-Type: application/json" -d '{}'
 ```
 
-설치·환경변수·엔드포인트·트러블슈팅: [`_docs/USER_GUIDE.md`](_docs/USER_GUIDE.md).
+설치·환경변수·엔드포인트·트러블슈팅: [`_docs/USAGE.md`](_docs/USAGE.md).
 
 ## 코딩 규칙
 
