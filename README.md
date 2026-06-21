@@ -1,6 +1,6 @@
 # FinanceManage_Agent-Project
 
-<img width="1465" height="883" alt="image" src="https://github.com/user-attachments/assets/457566be-1a0b-4d5b-a5cf-e4b1a4196221" />
+<img width="1190" height="805" alt="Image" src="https://github.com/user-attachments/assets/b1f8a4bc-125d-45b1-a9c8-bc25c34626e2" />
 
 > **데이터 분석을 통한 LLM 기반 주식 자동매매 시스템**
 > 매 거래일 KOSPI 100 종목을 다축으로 분석해 11개 피처를 산출하고, 생성형 AI(Gemini)의 유연한 판단과 룰 기반 안전망의 안정성을 결합한 **이중 검증** 구조로 매수/매도를 결정해 KIS 모의투자 API로 자동 주문하는 시스템입니다.
