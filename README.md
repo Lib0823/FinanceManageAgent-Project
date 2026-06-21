@@ -1,4 +1,4 @@
-# FinanceManage_Agent-Project
+# FinanceManage Agent
 
 <img width="1190" height="805" alt="Image" src="https://github.com/user-attachments/assets/b1f8a4bc-125d-45b1-a9c8-bc25c34626e2" />
 
