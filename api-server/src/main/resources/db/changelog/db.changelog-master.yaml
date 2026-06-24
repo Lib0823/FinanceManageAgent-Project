@@ -45,6 +45,11 @@ databaseChangeLog:
       file: classpath:db/changelog/mvp/v1.7-web-display-tables.yaml
       context: mvp
 
+  # Phase 9: Stock Master Catalog & User Favorites
+  - include:
+      file: classpath:db/changelog/mvp/v1.8-stock-master-favorites.yaml
+      context: mvp
+
   # ========================================
   # Product Context Changelogs (Future)
   # ========================================

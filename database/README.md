@@ -5,7 +5,7 @@ AI 주식 자동매매 시스템 데이터베이스 스키마 문서
 ## 개요
 
 - **DBMS**: PostgreSQL 16
-- **총 테이블 수**: 17개 (+ 뷰 4개)
+- **총 테이블 수**: 19개 (+ 뷰 4개)
 - **스키마**: 단일 public 스키마 (MVP 단순화)
 - **스키마 소스(편집 대상)**: **Liquibase** changelog (`api-server/src/main/resources/db/changelog/`)
 
@@ -35,6 +35,8 @@ database/
 4. 필요 시 이 README의 테이블 카탈로그 갱신
 
 > `schema.sql`을 직접 실행하거나 손으로 수정하지 마세요. 항상 changelog가 소스입니다.
+
+> ⚠️ **v1.8(`stock_master`/`user_favorites`) 추가 후 `schema.sql` 스냅샷은 아직 재생성되지 않았습니다.** 라이브 DB에 Liquibase가 v1.8을 적용한 뒤 `./database/generate-schema.sh`(내부적으로 `pg_dump -s`)를 실행해 재생성해야 합니다. DB 없이 DDL을 임의로 손으로 작성하지 마세요(스냅샷 위조 금지).
 
 상위 시스템 데이터 흐름은 [`../_docs/ARCHITECTURE.md`](../_docs/ARCHITECTURE.md) 참고.
 
@@ -79,7 +81,16 @@ database/
 | `feature_threshold_config` | 안전망 필터 임계값 (BUY/SELL 규칙, 동적 조정) | ai-agent (기본값 seed) |
 | `trade_history` | 주문 체결 이력 (KIS 주문번호, 상태, 체결가) | Spring Boot |
 
-### 5. 뷰 (4개)
+### 5. 검색 & 관심종목 (2개)
+
+| 테이블명 | 설명 | 관리 주체 |
+|---------|------|-----------|
+| `stock_master` | 종목 검색 카탈로그 (code/name/market). KOSPI 종목 seed | Spring Boot (Liquibase seed) |
+| `user_favorites` | 사용자별 관심종목 (user_id, stock_code, stock_name 비정규화) | Spring Boot |
+
+> `stock_master`는 `ai-agent/config/constants.py`의 `STOCK_NAMES`(+`005930` 삼성전자, `055550` 신한지주)를 seed한 검색 카탈로그(전부 `market='KOSPI'`)다. `user_favorites`는 `(user_id, stock_code)` unique, `user_id` FK→`users(id)` cascade.
+
+### 6. 뷰 (4개)
 
 | 뷰명 | 설명 |
 |------|------|
@@ -159,7 +170,8 @@ api-server/src/main/resources/db/changelog/
 │   ├── v1.4-test-data.yaml           # 테스트 데이터
 │   ├── v1.5-user-settings.yaml       # 사용자 UI 설정
 │   ├── v1.6-stage4-5-enhancements.yaml  # 안전망 필터 + 매매 실행 계획
-│   └── v1.7-web-display-tables.yaml  # 시장 요약 / 실시간 가격 / 보유 종목
+│   ├── v1.7-web-display-tables.yaml  # 시장 요약 / 실시간 가격 / 보유 종목
+│   └── v1.8-stock-master-favorites.yaml  # 종목 검색 카탈로그 + 관심종목
 └── product/                          # 프로덕션 context (향후)
 ```
 

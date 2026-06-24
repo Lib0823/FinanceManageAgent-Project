@@ -36,6 +36,7 @@ import java.util.Map;
 public class CompanyInfoService {
 
     private final KisQuoteService kisQuoteService;
+    private final KisQuoteClient kisQuoteClient;
     private final KisApiClient kisApiClient;
     private final DartApiClient dartApiClient;
 
@@ -60,7 +61,7 @@ public class CompanyInfoService {
         // --- KIS 주식현재가 시세 (실전 시세 도메인) ---
         String kisSector = null;
         boolean kisQuoteAvailable = false;
-        Map<String, Object> price = fetchInquirePrice(stockCode);
+        Map<String, Object> price = kisQuoteClient.fetchCurrentPrice(stockCode);
         if (price != null) {
             kisQuoteAvailable = true;
             builder.currentPrice(parseLong(price.get("stck_prpr")));
@@ -190,7 +191,7 @@ public class CompanyInfoService {
 
         // --- PER / PBR (현재가 시세) ---
         try {
-            Map<String, Object> price = fetchInquirePrice(stockCode);
+            Map<String, Object> price = kisQuoteClient.fetchCurrentPrice(stockCode);
             if (price != null) {
                 ratios.per(parseBigDecimal(price.get("per")));
                 ratios.pbr(parseBigDecimal(price.get("pbr")));
@@ -274,45 +275,6 @@ public class CompanyInfoService {
     // ---------------------------------------------------------------------
     // KIS helpers
     // ---------------------------------------------------------------------
-
-    /**
-     * 주식현재가 시세 (FHKST01010100). 실전 시세 도메인 + 실전 quote 자격증명 사용.
-     * 비활성/실패/rt_cd!=0 시 null.
-     */
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> fetchInquirePrice(String stockCode) {
-        try {
-            QuoteContext ctx = resolveQuoteContext();
-            if (ctx == null) {
-                return null;
-            }
-            Map<String, String> params = new HashMap<>();
-            params.put("FID_COND_MRKT_DIV_CODE", MARKET_DIV);
-            params.put("FID_INPUT_ISCD", stockCode);
-
-            ResponseEntity<Map> response = kisApiClient.get(
-                    ctx.baseUrl(),
-                    "/uapi/domestic-stock/v1/quotations/inquire-price",
-                    "FHKST01010100",
-                    ctx.token(),
-                    ctx.appKey(),
-                    ctx.appSecret(),
-                    params,
-                    Map.class
-            );
-            Map<String, Object> body = response.getBody();
-            if (!isRtOk(body)) {
-                log.warn("KIS inquire-price rt_cd!=0 for stockCode={}: {}", stockCode,
-                        body != null ? body.get("msg1") : "null body");
-                return null;
-            }
-            Object output = body.get("output");
-            return (output instanceof Map) ? (Map<String, Object>) output : null;
-        } catch (Exception e) {
-            log.warn("KIS inquire-price call failed for stockCode={}: {}", stockCode, e.getMessage());
-            return null;
-        }
-    }
 
     /**
      * KIS 국내주식 재무 API (손익/재무비율/안정성). 실전 시세 도메인 + 실전 quote 자격증명 사용.
