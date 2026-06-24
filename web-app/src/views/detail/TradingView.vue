@@ -1,14 +1,14 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '@/components/common/AppHeader.vue'
-import { tradingApi } from '@/services/api'
+import { stockApi, tradingApi } from '@/services/api'
 
 const route = useRoute()
 const router = useRouter()
 
 const symbol = ref(route.params.symbol || '005930')  // Default to Samsung Electronics
-const stockName = ref('삼성전자')  // Stock name
+const stockName = ref(route.query.name || '삼성전자')  // Stock name
 const activeTab = ref('buy')
 const loading = ref(false)
 const errorMessage = ref('')
@@ -19,21 +19,188 @@ const orderForm = ref({
   quantity: 1,
   maxQuantity: 100,
   price: 71500,
-  maxPrice: 1000000,
-  totalAmount: 71500
+  maxPrice: 1000000
 })
 
-const priceList = [
-  90000, 85000, 80000, 75000, 71500, 70000, 65000, 60000, 55000, 50000
-]
+// 실시간 시세
+const currentPrice = ref(null)
+const changeRate = ref(null)
+const changeAmount = ref(null)
+const priceNotice = ref(null)
+
+// 호가 (order book)
+const orderbookAsks = ref([]) // 매도호가 (높은 가격), 위쪽
+const orderbookBids = ref([]) // 매수호가, 아래쪽
+const orderbookNotice = ref(null)
+
+// 주문 가능 정보
+const orderableNotice = ref(null)
 
 const formatNumber = (num) => {
-  return new Intl.NumberFormat('ko-KR').format(num)
+  return new Intl.NumberFormat('ko-KR').format(Math.round(Number(num) || 0))
 }
 
+// 총 금액: 가격 * 수량 (가격·수량 양쪽에 반응)
+const totalAmount = computed(() => {
+  const price = Number(orderForm.value.price) || 0
+  const quantity = Number(orderForm.value.quantity) || 0
+  return price * quantity
+})
+
+// 현재 일시 (ko-KR)
+const currentDateTime = computed(() => {
+  const now = new Date()
+  const date = now.toLocaleDateString('ko-KR', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  })
+  const time = now.toLocaleTimeString('ko-KR', {
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+  return `${date} / ${time}`
+})
+
+// 호가창에 표시할 행 (매도 위, 매수 아래)
+const orderbookRows = computed(() => {
+  const asks = orderbookAsks.value.map((row) => ({ ...row, side: 'ask' }))
+  const bids = orderbookBids.value.map((row) => ({ ...row, side: 'bid' }))
+  return [...asks, ...bids]
+})
+
+// currentPrice 에 가장 가까운 행 highlight 판단
+const nearestPrice = computed(() => {
+  const base = Number(currentPrice.value)
+  if (!base) return null
+  let best = null
+  let bestDiff = Infinity
+  for (const row of orderbookRows.value) {
+    const diff = Math.abs(Number(row.price) - base)
+    if (diff < bestDiff) {
+      bestDiff = diff
+      best = row.price
+    }
+  }
+  return best
+})
+
 const selectPrice = (price) => {
+  if (!price) return
   orderForm.value.price = price
-  orderForm.value.totalAmount = price * orderForm.value.quantity
+}
+
+// 호가 데이터 없을 때 currentPrice 기준 ±5틱 사다리 생성 (fallback)
+const buildFallbackLadder = (base) => {
+  const center = Number(base)
+  if (!center) {
+    orderbookAsks.value = []
+    orderbookBids.value = []
+    return
+  }
+  const tick = estimateTick(center)
+  const asks = []
+  const bids = []
+  for (let i = 5; i >= 1; i--) {
+    asks.push({ price: center + tick * i, quantity: null })
+  }
+  for (let i = 1; i <= 5; i++) {
+    bids.push({ price: Math.max(center - tick * i, tick), quantity: null })
+  }
+  orderbookAsks.value = asks
+  orderbookBids.value = bids
+}
+
+// KRX 호가 단위 근사
+const estimateTick = (price) => {
+  if (price < 2000) return 1
+  if (price < 5000) return 5
+  if (price < 20000) return 10
+  if (price < 50000) return 50
+  if (price < 200000) return 100
+  if (price < 500000) return 500
+  return 1000
+}
+
+const loadPrice = async () => {
+  try {
+    const response = await stockApi.getPrice(symbol.value)
+    const data = response?.data || {}
+    if (data.notice) {
+      priceNotice.value = data.notice
+    } else {
+      priceNotice.value = null
+    }
+    if (data.currentPrice != null) {
+      currentPrice.value = Number(data.currentPrice)
+      changeAmount.value = data.changeAmount != null ? Number(data.changeAmount) : null
+      changeRate.value = data.changeRate != null ? Number(data.changeRate) : null
+      // 실제 현재가를 주문 가격 기본값으로 (수동 변경 전)
+      orderForm.value.price = Number(data.currentPrice)
+    }
+  } catch (error) {
+    console.error('Failed to load price:', error)
+    priceNotice.value = '시세 미연동'
+  }
+}
+
+const loadOrderbook = async () => {
+  try {
+    const response = await stockApi.getOrderbook(symbol.value)
+    const data = response?.data || {}
+    const asks = Array.isArray(data.asks) ? data.asks.filter((r) => r && r.price) : []
+    const bids = Array.isArray(data.bids) ? data.bids.filter((r) => r && r.price) : []
+
+    if (data.notice || (asks.length === 0 && bids.length === 0)) {
+      orderbookNotice.value = data.notice || '호가 미연동'
+      buildFallbackLadder(currentPrice.value)
+      return
+    }
+
+    orderbookNotice.value = null
+    // asks: 매도호가 높은가격 순 (내림차순) → 위쪽
+    orderbookAsks.value = [...asks].sort((a, b) => Number(b.price) - Number(a.price))
+    // bids: 매수호가 높은가격 순 (내림차순) → 아래쪽 상단부터
+    orderbookBids.value = [...bids].sort((a, b) => Number(b.price) - Number(a.price))
+  } catch (error) {
+    console.error('Failed to load orderbook:', error)
+    orderbookNotice.value = '호가 미연동'
+    buildFallbackLadder(currentPrice.value)
+  }
+}
+
+const loadOrderable = async () => {
+  try {
+    const price = Number(orderForm.value.price) || Number(currentPrice.value) || 0
+    const response = await tradingApi.getOrderable(symbol.value, price)
+    const data = response?.data || {}
+    if (data.notice) {
+      orderableNotice.value = data.notice
+      return
+    }
+    orderableNotice.value = null
+    if (data.maxBuyQuantity != null) {
+      orderForm.value.maxQuantity = Number(data.maxBuyQuantity)
+    }
+    if (data.orderableCash != null) {
+      orderForm.value.maxPrice = Number(data.orderableCash)
+    }
+  } catch (error) {
+    console.error('Failed to load orderable:', error)
+    orderableNotice.value = '주문가능 미연동'
+  }
+}
+
+// "최대" 선택 시 수량을 주문가능 최대로
+const setMaxQuantity = (event) => {
+  if (event.target.checked) {
+    orderForm.value.quantity = orderForm.value.maxQuantity
+  }
+}
+
+const loadMarketData = async () => {
+  await loadPrice()
+  await Promise.all([loadOrderbook(), loadOrderable()])
 }
 
 const placeOrder = async () => {
@@ -50,11 +217,10 @@ const placeOrder = async () => {
       price: orderForm.value.price
     }
 
-    let response
     if (activeTab.value === 'buy') {
-      response = await tradingApi.buy(orderData)
+      await tradingApi.buy(orderData)
     } else {
-      response = await tradingApi.sell(orderData)
+      await tradingApi.sell(orderData)
     }
 
     // Success
@@ -71,9 +237,51 @@ const placeOrder = async () => {
   }
 }
 
-// Mock orders for display (실제로는 API에서 가져와야 하지만 MVP에서는 생략)
+// 미체결 주문 (실데이터: /trading/pending-orders → daily-ccld 필터)
+const pendingOrders = ref([])
+
+const loadPendingOrders = async () => {
+  try {
+    const response = await tradingApi.getPendingOrders()
+    const list = Array.isArray(response?.data) ? response.data : []
+    pendingOrders.value = list.map((order) => ({
+      type: (order.orderType || '').toLowerCase() === 'sell' ? 'sell' : 'buy',
+      name: order.stockName || order.stockCode || '',
+      symbol: order.stockCode || '',
+      price: Number(order.orderPrice) || 0,
+      currency: '원'
+    }))
+  } catch (error) {
+    console.error('Failed to load pending orders:', error)
+    pendingOrders.value = []
+  }
+}
+
+onMounted(() => {
+  loadPendingOrders()
+  loadMarketData()
+})
+
+// 종목 변경 시 시세/호가/주문가능 재조회
+watch(symbol, () => {
+  loadMarketData()
+})
+
+// 가격 변경 시 주문가능 수량/금액 갱신
+let orderablePriceTimer = null
+watch(
+  () => orderForm.value.price,
+  () => {
+    if (orderablePriceTimer) clearTimeout(orderablePriceTimer)
+    orderablePriceTimer = setTimeout(() => {
+      loadOrderable()
+    }, 300)
+  }
+)
+
+// 예약 주문은 미지원 (추후 지원) → 항상 빈 배열
 const filteredOrders = computed(() => ({
-  pending: [],
+  pending: pendingOrders.value,
   reserved: []
 }))
 </script>
@@ -85,11 +293,22 @@ const filteredOrders = computed(() => ({
     <div class="content">
       <!-- Stock Header -->
       <div class="stock-header">
-        <h2 class="stock-name">{{ symbol }}(AMZN)</h2>
+        <h2 class="stock-name">{{ stockName }}({{ symbol }})</h2>
+        <div v-if="currentPrice != null" class="stock-price-row">
+          <span class="stock-current-price">{{ formatNumber(currentPrice) }}원</span>
+          <span
+            v-if="changeRate != null"
+            :class="['stock-change', changeRate >= 0 ? 'up' : 'down']"
+          >
+            {{ changeRate >= 0 ? '▲' : '▼' }}
+            <template v-if="changeAmount != null">{{ formatNumber(Math.abs(changeAmount)) }}</template>
+            ({{ changeRate >= 0 ? '+' : '' }}{{ changeRate.toFixed(2) }}%)
+          </span>
+        </div>
+        <p v-if="priceNotice" class="notice-text">{{ priceNotice }}</p>
         <div class="stock-tags">
-          <span class="tag">나스닥</span>
-          <span class="tag">도소매업</span>
-          <span class="tag">홀짝</span>
+          <span class="tag">국내</span>
+          <span class="tag">KOSPI</span>
         </div>
       </div>
 
@@ -106,19 +325,15 @@ const filteredOrders = computed(() => ({
           </div>
         </div>
 
-        <div class="order-group" v-if="filteredOrders.reserved.length > 0">
-          <h3 class="order-title">예약 주문</h3>
-          <div class="order-list">
-            <div v-for="(order, idx) in filteredOrders.reserved" :key="idx" class="order-item">
-              <span :class="['order-type', order.type]">{{ order.type === 'sell' ? '매도' : '매수' }}</span>
-              <span class="order-symbol">{{ order.name }}({{ order.symbol }})</span>
-              <span class="order-price">{{ formatNumber(order.price) }}{{ order.currency }}</span>
-            </div>
+        <div class="order-group">
+          <h3 class="order-title">예약 주문 (추후 지원)</h3>
+          <div class="no-orders">
+            <p>예약 주문 기능은 추후 지원될 예정입니다.</p>
           </div>
         </div>
 
-        <div v-if="filteredOrders.pending.length === 0 && filteredOrders.reserved.length === 0" class="no-orders">
-          <p>현재 {{ symbol }} 종목에 대한 미체결 및 예약 주문이 없습니다.</p>
+        <div v-if="filteredOrders.pending.length === 0" class="no-orders">
+          <p>현재 미체결 주문이 없습니다.</p>
         </div>
       </div>
 
@@ -127,13 +342,20 @@ const filteredOrders = computed(() => ({
         <!-- Price List (Order Book) -->
         <div class="price-list">
           <div
-            v-for="price in priceList"
-            :key="price"
-            :class="['price-item', { highlight: price === 400000 }]"
-            @click="selectPrice(price)"
+            v-for="(row, idx) in orderbookRows"
+            :key="`${row.side}-${row.price}-${idx}`"
+            :class="[
+              'price-item',
+              row.side,
+              { highlight: nearestPrice != null && row.price === nearestPrice }
+            ]"
+            @click="selectPrice(row.price)"
           >
-            {{ formatNumber(price) }}
+            <span class="price-item-price">{{ formatNumber(row.price) }}</span>
+            <span v-if="row.quantity != null" class="price-item-qty">{{ formatNumber(row.quantity) }}</span>
           </div>
+          <div v-if="orderbookRows.length === 0" class="price-item empty">호가 없음</div>
+          <p v-if="orderbookNotice" class="notice-text orderbook-notice">{{ orderbookNotice }}</p>
         </div>
 
         <!-- Order Form -->
@@ -168,9 +390,11 @@ const filteredOrders = computed(() => ({
               <span class="form-label">수량</span>
               <div class="form-input-group">
                 <input type="text" v-model="orderForm.quantity" class="form-input" />
-                <span class="form-hint">주문 가능 {{ orderForm.maxQuantity }}주</span>
+                <span class="form-hint">
+                  주문 가능 {{ formatNumber(orderForm.maxQuantity) }}주
+                </span>
                 <label class="checkbox-small">
-                  <input type="checkbox" /> 최대
+                  <input type="checkbox" @change="setMaxQuantity" /> 최대
                 </label>
               </div>
             </div>
@@ -179,14 +403,12 @@ const filteredOrders = computed(() => ({
               <div class="form-input-group">
                 <input type="text" v-model="orderForm.price" class="form-input" />
                 <span class="form-hint">주문 가능 {{ formatNumber(orderForm.maxPrice) }}원</span>
-                <label class="checkbox-small">
-                  <input type="checkbox" /> 최대
-                </label>
               </div>
             </div>
+            <p v-if="orderableNotice" class="notice-text">{{ orderableNotice }}</p>
             <div class="form-row total">
-              <span class="form-label">총 매수 금액</span>
-              <span class="form-total">{{ formatNumber(orderForm.totalAmount) }}원</span>
+              <span class="form-label">총 {{ activeTab === 'buy' ? '매수' : '매도' }} 금액</span>
+              <span class="form-total">{{ formatNumber(totalAmount) }}원</span>
             </div>
 
             <!-- Date Time -->
@@ -197,7 +419,7 @@ const filteredOrders = computed(() => ({
                   <path d="M16 2V6M8 2V6M3 10H21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                 </svg>
               </span>
-              <span class="datetime-value">2024, 10, 26 / 10:25</span>
+              <span class="datetime-value">{{ currentDateTime }}</span>
             </div>
           </div>
 
@@ -206,7 +428,7 @@ const filteredOrders = computed(() => ({
             :class="['submit-btn', activeTab]"
             @click="placeOrder"
           >
-            예약 {{ activeTab === 'buy' ? '매수' : '매도' }} 주문
+            {{ activeTab === 'buy' ? '매수' : '매도' }} 주문
           </button>
         </div>
       </div>
@@ -233,6 +455,42 @@ const filteredOrders = computed(() => ({
   font-weight: var(--font-weight-bold);
   color: var(--color-text-primary);
   margin-bottom: var(--spacing-sm);
+}
+
+.stock-price-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-sm);
+}
+
+.stock-current-price {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+}
+
+.stock-change {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.stock-change.up {
+  color: var(--color-stock-up);
+}
+
+.stock-change.down {
+  color: var(--color-stock-down);
+}
+
+.notice-text {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  margin-bottom: var(--spacing-sm);
+}
+
+.orderbook-notice {
+  text-align: center;
 }
 
 .stock-tags {
@@ -326,6 +584,10 @@ const filteredOrders = computed(() => ({
 }
 
 .price-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
   padding: var(--spacing-sm);
   text-align: center;
   font-size: var(--font-size-sm);
@@ -334,18 +596,37 @@ const filteredOrders = computed(() => ({
   cursor: pointer;
 }
 
-.price-item:nth-child(-n+5) {
+/* 매도호가 (asks) → 위쪽, 파란색 */
+.price-item.ask {
   background: #DBEAFE;
   color: var(--color-stock-down);
 }
 
-.price-item:nth-child(n+6) {
+/* 매수호가 (bids) → 아래쪽, 빨간색 */
+.price-item.bid {
   background: #FEE2E2;
   color: var(--color-stock-up);
 }
 
+.price-item.empty {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-tertiary);
+  cursor: default;
+}
+
+.price-item-price {
+  font-size: var(--font-size-sm);
+}
+
+.price-item-qty {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
 .price-item.highlight {
   font-weight: var(--font-weight-bold);
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
 }
 
 .order-form {

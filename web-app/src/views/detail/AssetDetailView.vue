@@ -4,7 +4,6 @@ import { useRouter, useRoute } from 'vue-router'
 import AppHeader from '@/components/common/AppHeader.vue'
 import AssetTabs from '@/components/common/AssetTabs.vue'
 import { assetApi } from '@/services/api'
-import { mockStocks } from '@/services/mockData'
 
 const router = useRouter()
 const route = useRoute()
@@ -16,25 +15,42 @@ const errorMessage = ref('')
 // 국내 주식 데이터 (API에서 가져옴)
 const domesticStocks = ref([])
 
-// 해외 주식 데이터 (Mock - KIS API는 국내 주식만 지원)
-const overseasStocks = ref(mockStocks)
+// 해외 주식 데이터 (KIS 모의투자 미지원 → 추후 지원)
+const overseasStocks = ref([])
 
 // 현재 선택된 탭에 따른 주식 데이터
 const currentStocks = computed(() => {
   return tabs.value.sub === 'domestic' ? domesticStocks.value : overseasStocks.value
 })
 
-// 현금 데이터 (API에서 가져옴)
+// 국내 주식 요약 (balance summary 기반, API에서 가져옴)
+const domesticSummary = ref({
+  totalValuation: 0,
+  totalProfit: 0,
+  profitPercent: 0,
+  totalPurchase: 0,
+  d2Deposit: 0
+})
+
+// 빈 요약 (해외 등 미지원 탭)
+const emptySummary = {
+  totalValuation: 0,
+  totalProfit: 0,
+  profitPercent: 0,
+  totalPurchase: 0,
+  d2Deposit: 0
+}
+
+// 현재 선택된 탭에 따른 요약 (해외는 추후 지원 → 빈 값)
+const currentSummary = computed(() => {
+  return tabs.value.sub === 'domestic' ? domesticSummary.value : emptySummary
+})
+
+// 현금 데이터 (API에서 가져옴, KRW만 지원)
 const cashDetail = ref({
   krw: {
     availableForOrder: 0,
     availableForWithdrawal: 0
-  },
-  usd: {
-    amount: 0,
-    availableForOrder: 0,
-    availableForWithdrawal: 0,
-    exchangeRate: 1350
   }
 })
 
@@ -72,11 +88,20 @@ const loadBalance = async () => {
   try {
     const response = await assetApi.getBalance()
 
-    // KIS API 응답 구조에 맞춰 파싱
-    if (response.data?.balance?.output2) {
-      const balanceData = response.data.balance.output2[0]
+    // KIS API 응답 구조에 맞춰 파싱 (output2[0] = 잔고 요약)
+    const balanceData = response.data?.balance?.output2?.[0]
+    if (balanceData) {
       cashDetail.value.krw.availableForOrder = parseInt(balanceData.ord_psbl_cash || 0)  // 주문가능현금
       cashDetail.value.krw.availableForWithdrawal = parseInt(balanceData.wdrw_psbl_tot_amt || 0)  // 출금가능금액
+
+      // 국내 주식 요약
+      domesticSummary.value = {
+        totalValuation: parseInt(balanceData.tot_evlu_amt || 0),        // 총평가금액
+        totalProfit: parseInt(balanceData.evlu_pfls_smtl_amt || 0),     // 평가손익합계
+        profitPercent: parseFloat(balanceData.asst_icdc_erng_rt || 0),  // 자산증감수익률
+        totalPurchase: parseInt(balanceData.pchs_amt_smtl_amt || 0),    // 매입금액합계
+        d2Deposit: parseInt(balanceData.ord_psbl_cash || 0)             // D+2 예수금(주문가능현금)
+      }
     }
   } catch (error) {
     console.error('Failed to load balance:', error)
@@ -96,13 +121,8 @@ onMounted(async () => {
   await Promise.all([loadHoldings(), loadBalance()])
 })
 
-// USD를 원화로 환산
-const usdToKrw = computed(() => {
-  return cashDetail.value.usd.amount * cashDetail.value.usd.exchangeRate
-})
-
 const formatNumber = (num) => {
-  return new Intl.NumberFormat('ko-KR').format(num)
+  return new Intl.NumberFormat('ko-KR').format(Number(num) || 0)
 }
 
 const goToNews = (stock) => {
@@ -115,10 +135,6 @@ const goToTrade = (stock) => {
 
 const goToInfo = (stock) => {
   router.push(`/company/${stock.symbol}`)
-}
-
-const goToTransfer = () => {
-  router.push('/transfer')
 }
 </script>
 
@@ -150,32 +166,22 @@ const goToTransfer = () => {
           </div>
         </div>
 
-        <!-- USD Card -->
-        <div class="cash-card">
+        <!-- USD Card (추후 지원) -->
+        <div class="cash-card disabled-card">
           <div class="cash-header">
-            <h3 class="cash-title">USD</h3>
-            <div class="cash-total-group">
-              <span class="cash-total">${{ formatNumber(cashDetail.usd.amount) }}</span>
-              <span class="cash-total-krw">({{ formatNumber(usdToKrw) }}원)</span>
-            </div>
+            <h3 class="cash-title">USD (추후 지원)</h3>
           </div>
           <div class="cash-details">
             <div class="cash-detail-item">
               <span class="detail-label">주문가능금</span>
-              <span class="detail-value">${{ formatNumber(cashDetail.usd.availableForOrder) }}</span>
+              <span class="detail-value">—</span>
             </div>
             <div class="cash-detail-item">
               <span class="detail-label">출금가능금</span>
-              <span class="detail-value">${{ formatNumber(cashDetail.usd.availableForWithdrawal) }}</span>
+              <span class="detail-value">—</span>
             </div>
           </div>
         </div>
-
-        <!-- 계좌이체 버튼 -->
-        <button class="transfer-btn" @click="goToTransfer">
-          <span>계좌이체</span>
-          <van-icon name="arrow" />
-        </button>
       </div>
 
       <!-- 주식 화면 -->
@@ -183,21 +189,21 @@ const goToTransfer = () => {
         <!-- Summary Card -->
         <div class="summary-card">
           <div class="summary-header">
-            <h3 class="summary-title">{{ tabs.sub === 'domestic' ? '국내' : '해외' }} 주식</h3>
+            <h3 class="summary-title">{{ tabs.sub === 'domestic' ? '국내' : '해외 (추후 지원)' }} 주식</h3>
             <div class="profit-badge">
-              <span class="profit-icon">{{ stockDetail[tabs.sub].profitPercent >= 0 ? '▲' : '▼' }}</span>
-              <span class="profit-percent">{{ stockDetail[tabs.sub].profitPercent }}%</span>
+              <span class="profit-icon">{{ currentSummary.profitPercent >= 0 ? '▲' : '▼' }}</span>
+              <span class="profit-percent">{{ currentSummary.profitPercent }}%</span>
             </div>
           </div>
 
           <div class="summary-main">
             <div class="main-info">
               <span class="main-label">총평가금액</span>
-              <span class="main-value">{{ formatNumber(stockDetail[tabs.sub].totalValuation) }}<span class="unit">원</span></span>
+              <span class="main-value">{{ formatNumber(currentSummary.totalValuation) }}<span class="unit">원</span></span>
             </div>
             <div class="profit-info">
               <span class="profit-label">총평가손익</span>
-              <span class="profit-value positive">{{ formatNumber(stockDetail[tabs.sub].totalProfit) }}원</span>
+              <span class="profit-value" :class="currentSummary.totalProfit >= 0 ? 'positive' : 'negative'">{{ formatNumber(currentSummary.totalProfit) }}원</span>
             </div>
           </div>
 
@@ -205,12 +211,12 @@ const goToTransfer = () => {
             <div class="detail-row">
               <div class="detail-item">
                 <span class="detail-label">D+2예수금</span>
-                <span class="detail-value">{{ formatNumber(stockDetail[tabs.sub].d2Deposit) }}원</span>
+                <span class="detail-value">{{ formatNumber(currentSummary.d2Deposit) }}원</span>
               </div>
               <div class="detail-divider"></div>
               <div class="detail-item">
                 <span class="detail-label">총매입금액</span>
-                <span class="detail-value">{{ formatNumber(stockDetail[tabs.sub].totalPurchase) }}원</span>
+                <span class="detail-value">{{ formatNumber(currentSummary.totalPurchase) }}원</span>
               </div>
             </div>
           </div>
@@ -218,6 +224,11 @@ const goToTransfer = () => {
 
         <!-- Stock List -->
         <div class="stock-list">
+          <!-- Empty State -->
+          <div v-if="currentStocks.length === 0" class="empty-state">
+            {{ tabs.sub === 'domestic' ? '보유 중인 국내 주식이 없습니다' : '해외 주식은 추후 지원 예정입니다' }}
+          </div>
+
           <div v-for="stock in currentStocks" :key="stock.symbol" class="stock-card-enhanced">
             <!-- Stock Info Header -->
             <div class="stock-header">
@@ -399,6 +410,10 @@ const goToTransfer = () => {
   color: var(--color-stock-up);
 }
 
+.profit-value.negative {
+  color: var(--color-stock-down);
+}
+
 /* 상세 정보 영역 */
 .summary-details {
   background: rgba(255, 255, 255, 0.03);
@@ -440,6 +455,15 @@ const goToTransfer = () => {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-md);
+}
+
+.empty-state {
+  padding: var(--spacing-xl);
+  text-align: center;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: var(--radius-lg);
 }
 
 /* Enhanced Stock Card */
@@ -626,6 +650,14 @@ const goToTransfer = () => {
   padding: var(--spacing-lg);
 }
 
+.cash-card.disabled-card {
+  opacity: 0.6;
+}
+
+.cash-card.disabled-card .cash-title {
+  color: var(--color-text-tertiary);
+}
+
 .cash-header {
   display: flex;
   justify-content: space-between;
@@ -683,30 +715,4 @@ const goToTransfer = () => {
   color: var(--color-text-primary);
 }
 
-.transfer-btn {
-  width: 100%;
-  padding: var(--spacing-md);
-  background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%);
-  border: none;
-  border-radius: var(--radius-lg);
-  font-size: var(--font-size-base);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-inverse);
-  cursor: pointer;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: var(--spacing-sm);
-  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
-  transition: all 0.2s ease;
-}
-
-.transfer-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(245, 158, 11, 0.4);
-}
-
-.transfer-btn:active {
-  transform: translateY(0);
-}
 </style>

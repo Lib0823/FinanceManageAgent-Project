@@ -1,40 +1,109 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AppHeader from '@/components/common/AppHeader.vue'
-import { Doughnut, Line } from 'vue-chartjs'
+import { Doughnut } from 'vue-chartjs'
 import {
   Chart as ChartJS,
   ArcElement,
   Tooltip,
-  Legend,
-  LineElement,
-  PointElement,
-  LinearScale,
-  CategoryScale
+  Legend
 } from 'chart.js'
-import { mockAssetSummary } from '@/services/mockData'
+import { assetApi } from '@/services/api'
 
-ChartJS.register(ArcElement, Tooltip, Legend, LineElement, PointElement, LinearScale, CategoryScale)
+ChartJS.register(ArcElement, Tooltip, Legend)
 
 const router = useRouter()
 
-const assetSummary = ref(mockAssetSummary)
+const loading = ref(false)
 
-// 7일간 자산 추이 데이터 (Mock)
-const assetTrendData = ref({
-  labels: ['월', '화', '수', '목', '금', '토', '일'],
-  datasets: [{
-    label: '총 자산',
-    data: [98000000, 98500000, 99200000, 99800000, 99500000, 100200000, 100000000],
-    borderColor: '#3B82F6',
-    backgroundColor: 'rgba(59, 130, 246, 0.1)',
-    tension: 0.4,
-    fill: true,
-    pointRadius: 3,
-    pointHoverRadius: 5
-  }]
+// 자산 요약 (실데이터로 채움). 채권/코인은 추후 지원 → 0.
+const assetSummary = ref({
+  totalAsset: 0,
+  totalChange: 0,
+  changePercent: 0,
+  updatedAt: '',
+  breakdown: {
+    cash: { amount: 0, change: 0, changePercent: 0 },
+    stocks: { amount: 0, change: 0, changePercent: 0 },
+    bonds: { amount: 0, change: 0, changePercent: 0 },
+    coins: { amount: 0, change: 0, changePercent: 0 }
+  }
 })
+
+// 숫자 파싱 (KIS 응답은 문자열, 빈/누락 시 0)
+const toNumber = (value) => {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : 0
+}
+
+// KIS inquire-balance output2[0]에서 현금/요약 추출 (키 폴백으로 방어적 매핑)
+const pick = (obj, keys) => {
+  if (!obj) return 0
+  for (const key of keys) {
+    if (obj[key] !== undefined && obj[key] !== null && obj[key] !== '') {
+      return toNumber(obj[key])
+    }
+  }
+  return 0
+}
+
+const loadAssets = async () => {
+  loading.value = true
+  try {
+    const [balanceRes, holdingsRes] = await Promise.all([
+      assetApi.getBalance(),
+      assetApi.getHoldings()
+    ])
+
+    // getBalance() → { balance: { output1, output2 } }
+    const balance = balanceRes?.data?.balance ?? balanceRes?.data ?? {}
+    // getHoldings() → { output1, output2 }
+    const holdings = holdingsRes?.data ?? {}
+
+    const summaryRow = Array.isArray(balance.output2) && balance.output2.length > 0
+      ? balance.output2[0]
+      : (Array.isArray(holdings.output2) && holdings.output2.length > 0 ? holdings.output2[0] : null)
+
+    // 현금: 주문가능현금 우선, 없으면 예수금총액
+    const cashAmount = pick(summaryRow, ['ord_psbl_cash', 'dnca_tot_amt', 'prvs_rcdl_excc_amt'])
+
+    // 주식 평가금액 / 손익
+    const stockEvalAmount = pick(summaryRow, ['scts_evlu_amt', 'tot_evlu_amt'])
+    const stockProfit = pick(summaryRow, ['evlu_pfls_smtl_amt', 'tot_evlu_pfls_amt', 'evlu_pfls_smtl'])
+    // 수익률(%) → 소수 비율로 변환 (formatPercent가 *100 함)
+    const stockProfitRatePct = pick(summaryRow, ['asst_icdc_erng_rt', 'evlu_pfls_rt'])
+    const stockChangePercent = stockProfitRatePct / 100
+
+    // output2에 종목평가금액이 없으면 보유종목 평가금액 합으로 보강
+    let stocksAmount = stockEvalAmount
+    if (stocksAmount === 0 && Array.isArray(holdings.output1)) {
+      stocksAmount = holdings.output1.reduce((sum, item) => sum + pick(item, ['evlu_amt']), 0)
+    }
+
+    const totalAsset = cashAmount + stocksAmount
+
+    assetSummary.value = {
+      totalAsset,
+      // 총자산 전일대비 추세 엔드포인트 없음 → 주식 평가손익을 총 변동으로 표시
+      totalChange: stockProfit,
+      changePercent: totalAsset > 0 ? stockProfit / totalAsset : 0,
+      updatedAt: new Date().toISOString().slice(0, 19).replace('T', ' '),
+      breakdown: {
+        cash: { amount: cashAmount, change: 0, changePercent: 0 },
+        stocks: { amount: stocksAmount, change: stockProfit, changePercent: stockChangePercent },
+        bonds: { amount: 0, change: 0, changePercent: 0 },
+        coins: { amount: 0, change: 0, changePercent: 0 }
+      }
+    }
+  } catch (error) {
+    console.error('Failed to load assets:', error)
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(loadAssets)
 
 const formatNumber = (num) => {
   return new Intl.NumberFormat('ko-KR').format(num)
@@ -51,6 +120,7 @@ const formatPercent = (percent) => {
 }
 
 const calculatePercentage = (amount, total) => {
+  if (!total) return '0.0'
   return ((amount / total) * 100).toFixed(1)
 }
 
@@ -90,43 +160,6 @@ const pieChartOptions = {
   cutout: '70%'
 }
 
-const lineChartOptions = {
-  responsive: true,
-  maintainAspectRatio: false,
-  plugins: {
-    legend: {
-      display: false
-    },
-    tooltip: {
-      callbacks: {
-        label: function(context) {
-          return `${formatNumber(context.parsed.y)}원`
-        }
-      }
-    }
-  },
-  scales: {
-    y: {
-      display: false,
-      grid: {
-        display: false
-      }
-    },
-    x: {
-      display: true,
-      grid: {
-        display: false
-      },
-      ticks: {
-        font: {
-          size: 10
-        },
-        color: '#9CA3AF'
-      }
-    }
-  }
-}
-
 const assetColors = {
   cash: '#3B82F6',
   stocks: '#F97316',
@@ -146,17 +179,14 @@ const goToDetail = (type) => {
     path: '/assets/detail',
     query: {
       main: type,
-      sub: type === 'stocks' ? 'overseas' : undefined
+      // 해외 주식은 추후 지원 → 국내 탭으로 진입
+      sub: type === 'stocks' ? 'domestic' : undefined
     }
   })
 }
 
 const handleRefresh = () => {
-  // TODO: 실제 자산 정보 새로고침 API 호출
-  console.log('자산 정보 새로고침')
-  // 임시로 현재 시간으로 업데이트
-  const now = new Date()
-  assetSummary.value.updatedAt = now.toISOString().slice(0, 19).replace('T', ' ')
+  loadAssets()
 }
 </script>
 
@@ -210,14 +240,6 @@ const handleRefresh = () => {
               </div>
               <span class="legend-value">{{ formatNumber(item.amount) }}원</span>
             </div>
-          </div>
-        </div>
-
-        <!-- 7-Day Trend Chart -->
-        <div class="trend-section">
-          <h3 class="section-title">최근 7일 자산 추이</h3>
-          <div class="line-chart">
-            <Line :data="assetTrendData" :options="lineChartOptions" />
           </div>
         </div>
       </section>
@@ -297,14 +319,14 @@ const handleRefresh = () => {
         </section>
       </div>
 
-      <!-- Bonds (Disabled) -->
+      <!-- Bonds (추후 지원) -->
       <section class="asset-card disabled">
-        <div class="disabled-text">채권 (비활성)</div>
+        <div class="disabled-text">채권 (추후 지원)</div>
       </section>
 
-      <!-- Coins (Disabled) -->
+      <!-- Coins (추후 지원) -->
       <section class="asset-card disabled">
-        <div class="disabled-text">코인 (비활성)</div>
+        <div class="disabled-text">코인 (추후 지원)</div>
       </section>
     </div>
 
@@ -513,27 +535,6 @@ const handleRefresh = () => {
   font-size: 14px;
   color: #F1F5F9;
   font-weight: var(--font-weight-semibold);
-}
-
-/* Trend Section */
-.trend-section {
-  margin-top: 24px;
-  padding-top: 24px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.section-title {
-  font-size: 16px;
-  font-weight: var(--font-weight-semibold);
-  color: #F1F5F9;
-  margin-bottom: 16px;
-}
-
-.line-chart {
-  height: 120px;
-  padding: 12px;
-  background: rgba(255, 255, 255, 0.03);
-  border-radius: 12px;
 }
 
 /* Asset Cards */

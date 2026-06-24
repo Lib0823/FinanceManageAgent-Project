@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AppHeader from '@/components/common/AppHeader.vue'
 import InvestmentTabs from '@/components/common/InvestmentTabs.vue'
@@ -20,13 +20,6 @@ const orders = ref({
   reserved: []
 })
 
-// 요약 데이터
-const summary = ref({
-  buy: { amount: 0 },
-  sell: { amount: 0 },
-  other: { amount: 0, label: '배당금' }
-})
-
 // Load trade history
 const loadHistory = async () => {
   try {
@@ -45,6 +38,8 @@ const loadHistory = async () => {
         quantity: trade.quantity,
         price: trade.executedPrice || trade.orderPrice,
         amount: (trade.executedPrice || trade.orderPrice) * trade.quantity,
+        // 기간 필터가 날짜를 비교할 수 있도록 원본 타임스탬프(Date)를 보존한다.
+        orderedAt: new Date(trade.orderedAt),
         date: new Date(trade.orderedAt).toLocaleDateString('ko-KR'),
         time: new Date(trade.orderedAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }),
         status: trade.orderStatus,  // PENDING, COMPLETED 등
@@ -55,16 +50,8 @@ const loadHistory = async () => {
       orders.value.pending = history.value.filter(t => t.status === 'PENDING')
       orders.value.reserved = []  // 예약 주문은 별도 API 필요 시 추가
 
-      // 요약 데이터 계산
-      const buyTrades = history.value.filter(t => t.type === 'buy' && t.status === 'COMPLETED')
-      const sellTrades = history.value.filter(t => t.type === 'sell' && t.status === 'COMPLETED')
-
-      const totalBuy = buyTrades.reduce((sum, t) => sum + t.amount, 0)
-      const totalSell = sellTrades.reduce((sum, t) => sum + t.amount, 0)
-
-      summary.value.buy = { amount: totalBuy }
-      summary.value.sell = { amount: totalSell }
-      summary.value.other = { amount: 0, label: '배당금' }  // 배당금/입출금은 별도 API 필요
+      // 요약(총 매수/매도/기타)은 선택 기간(filteredHistory) 기준으로
+      // computed(summary)에서 자동 재계산된다.
     }
   } catch (error) {
     console.error('Failed to load trade history:', error)
@@ -94,19 +81,13 @@ const goToTrading = (order) => {
 }
 
 // 기간 선택 (달력 대신 버튼 방식)
+// KIS 체결조회는 약 3개월치만 반환하므로 그 이상은 노출하지 않는다.
 const selectedPeriod = ref('1month')
 const periodOptions = [
   { key: '1week', label: '1주일' },
   { key: '1month', label: '1개월' },
-  { key: '3months', label: '3개월' },
-  { key: '6months', label: '6개월' },
-  { key: '1year', label: '1년' }
+  { key: '3months', label: '3개월' }
 ]
-
-const dateRange = ref({
-  start: '2024.08.19',
-  end: '2024.11.09'
-})
 
 const formatDate = (date) => {
   const year = date.getFullYear()
@@ -115,48 +96,55 @@ const formatDate = (date) => {
   return `${year}.${month}.${day}`
 }
 
-const selectPeriod = (key) => {
-  selectedPeriod.value = key
-
-  const today = new Date()
-  const startDate = new Date()
-
-  // 기간에 따라 시작 날짜 계산
+// 선택 기간으로부터 컷오프(시작) 날짜를 계산한다. (오늘 기준 상대값)
+const getCutoffDate = (key) => {
+  const cutoff = new Date()
+  cutoff.setHours(0, 0, 0, 0)
   switch (key) {
     case '1week':
-      startDate.setDate(today.getDate() - 7)
+      cutoff.setDate(cutoff.getDate() - 7)
       break
     case '1month':
-      startDate.setMonth(today.getMonth() - 1)
+      cutoff.setMonth(cutoff.getMonth() - 1)
       break
     case '3months':
-      startDate.setMonth(today.getMonth() - 3)
-      break
-    case '6months':
-      startDate.setMonth(today.getMonth() - 6)
-      break
-    case '1year':
-      startDate.setFullYear(today.getFullYear() - 1)
+      cutoff.setMonth(cutoff.getMonth() - 3)
       break
   }
-
-  dateRange.value = {
-    start: formatDate(startDate),
-    end: formatDate(today)
-  }
+  return cutoff
 }
+
+const selectPeriod = (key) => {
+  selectedPeriod.value = key
+}
+
+// 표시용 날짜 범위(시작=컷오프, 끝=오늘)를 선택 기간에서 파생한다.
+const dateRange = computed(() => ({
+  start: formatDate(getCutoffDate(selectedPeriod.value)),
+  end: formatDate(new Date())
+}))
+
+// 선택 기간 내(컷오프 ~ 오늘) 거래만 필터링한다. 원본 orderedAt(Date)로 비교.
+const filteredHistory = computed(() => {
+  const cutoff = getCutoffDate(selectedPeriod.value)
+  return history.value.filter(t => t.orderedAt instanceof Date && t.orderedAt >= cutoff)
+})
+
+// 요약(총 매수/총 매도)을 선택 기간(filteredHistory) 기준으로 재계산한다.
+// 배당 수령액·현금 입출금 내역은 KIS 국내주식 OpenAPI에 전용 TR이 없어(개인 ledger 미제공,
+// 배당은 종목 기준 '배당일정' HHKDB669102C0만 존재) 요약에서 제외한다. 체결 기반 매수/매도만 집계.
+const summary = computed(() => {
+  const buyTrades = filteredHistory.value.filter(t => t.type === 'buy' && t.status === 'COMPLETED')
+  const sellTrades = filteredHistory.value.filter(t => t.type === 'sell' && t.status === 'COMPLETED')
+
+  return {
+    buy: { amount: buyTrades.reduce((sum, t) => sum + t.amount, 0) },
+    sell: { amount: sellTrades.reduce((sum, t) => sum + t.amount, 0) }
+  }
+})
 
 const formatNumber = (num) => {
   return new Intl.NumberFormat('ko-KR').format(num)
-}
-
-const getTypeClass = (type) => {
-  switch (type) {
-    case 'buy': return 'buy'
-    case 'sell': return 'sell'
-    case 'dividend': return 'dividend'
-    default: return ''
-  }
 }
 
 const getTypeLabel = (type) => {
@@ -258,20 +246,19 @@ const getTypeLabel = (type) => {
               <span class="summary-type sell">총 매도</span>
               <span class="summary-amount">{{ formatNumber(summary.sell.amount) }}</span>
             </div>
-            <div class="summary-item">
-              <span class="summary-type other">기타</span>
-              <span class="summary-amount">{{ formatNumber(summary.other.amount) }}</span>
-            </div>
           </div>
         </div>
 
         <!-- History List -->
         <div class="history-list">
-          <div v-for="(item, idx) in history" :key="idx" class="history-item">
+          <div v-for="(item, idx) in filteredHistory" :key="idx" class="history-item">
             <span :class="['history-type', item.type]">{{ getTypeLabel(item.type) }}</span>
             <span class="history-name">{{ item.name || item.label }}</span>
             <span class="history-amount">{{ formatNumber(item.amount) }}{{ item.currency }}</span>
           </div>
+          <p v-if="filteredHistory.length === 0" class="empty-submessage">
+            선택한 기간의 거래 내역이 없습니다
+          </p>
         </div>
       </section>
       </template>

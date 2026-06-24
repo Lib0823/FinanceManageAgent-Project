@@ -1,58 +1,146 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AppHeader from '@/components/common/AppHeader.vue'
 import InvestmentTabs from '@/components/common/InvestmentTabs.vue'
-import { mockSearchResults } from '@/services/mockData'
+import { stockApi, favoriteApi } from '@/services/api'
 
 const router = useRouter()
 
 const tabs = ref({ main: 'stocks', sub: 'domestic' })
 const searchQuery = ref('')
-const results = ref(mockSearchResults)
+const results = ref([])
+const searching = ref(false)
+const searchError = ref('')
 
-// Mock price data (나중에 API로 대체)
-const priceData = {
-  currentPrice: 71500,
-  change: 500,
-  changePercent: 0.70
-}
+// 종목코드별 현재가 캐시 (lazy 로딩)
+const priceMap = ref({})
+// 관심종목 코드 집합
+const favoriteCodes = ref(new Set())
+
+const isDomestic = computed(() => tabs.value.sub === 'domestic')
 
 const filteredResults = computed(() => {
-  let filtered = results.value
-
-  // 시장 필터링 (국내/해외)
-  filtered = filtered.filter(item => item.market === tabs.value.sub)
-
-  // 검색어 필터링
-  if (searchQuery.value) {
-    const query = searchQuery.value.toLowerCase()
-    filtered = filtered.filter(
-      item => item.name.toLowerCase().includes(query) || item.symbol.toLowerCase().includes(query)
-    )
+  // 백엔드 검색이 종목코드/이름으로 이미 필터링하므로 그대로 사용 (국내만 제공)
+  if (!isDomestic.value) {
+    return []
   }
-
-  return filtered
+  return results.value
 })
 
 const formatNumber = (num) => {
+  if (num === null || num === undefined || Number.isNaN(Number(num))) {
+    return '—'
+  }
   return new Intl.NumberFormat('ko-KR').format(num)
 }
 
-const toggleFavorite = (item) => {
-  item.isFavorite = !item.isFavorite
+const handleSearch = async () => {
+  const query = searchQuery.value.trim()
+  searchError.value = ''
+
+  if (!query) {
+    results.value = []
+    return
+  }
+
+  if (!isDomestic.value) {
+    results.value = []
+    return
+  }
+
+  searching.value = true
+  try {
+    const data = await stockApi.search(query)
+    results.value = Array.isArray(data) ? data : []
+  } catch (error) {
+    console.error('종목 검색 실패:', error)
+    results.value = []
+    searchError.value = '검색 중 오류가 발생했습니다'
+  } finally {
+    searching.value = false
+  }
+}
+
+// 항목별 현재가 lazy 로딩
+const loadPrice = async (stockCode) => {
+  if (!stockCode || priceMap.value[stockCode]) {
+    return
+  }
+  // 중복 호출 방지를 위해 placeholder 선점
+  priceMap.value = { ...priceMap.value, [stockCode]: { loading: true } }
+  try {
+    const data = await stockApi.getPrice(stockCode)
+    priceMap.value = {
+      ...priceMap.value,
+      [stockCode]: {
+        loading: false,
+        currentPrice: data?.currentPrice ?? null,
+        changeAmount: data?.changeAmount ?? null,
+        changeRate: data?.changeRate ?? null,
+        notice: data?.notice ?? null
+      }
+    }
+  } catch (error) {
+    console.error(`현재가 조회 실패 (${stockCode}):`, error)
+    priceMap.value = {
+      ...priceMap.value,
+      [stockCode]: { loading: false, currentPrice: null, changeAmount: null, changeRate: null, notice: '—' }
+    }
+  }
+}
+
+const getPriceInfo = (stockCode) => priceMap.value[stockCode] || null
+
+// 검색 결과가 바뀌면 각 항목 현재가 조회
+watch(
+  filteredResults,
+  (items) => {
+    items.forEach((item) => loadPrice(item.stockCode))
+  },
+  { immediate: false }
+)
+
+const loadFavorites = async () => {
+  try {
+    const data = await favoriteApi.list()
+    const codes = Array.isArray(data) ? data.map((f) => f.stockCode) : []
+    favoriteCodes.value = new Set(codes)
+  } catch (error) {
+    // 비로그인/오류 시 관심종목 표시만 비움 (검색은 정상 동작)
+    console.error('관심종목 조회 실패:', error)
+    favoriteCodes.value = new Set()
+  }
+}
+
+const isFavorite = (stockCode) => favoriteCodes.value.has(stockCode)
+
+const toggleFavorite = async (item) => {
+  const code = item.stockCode
+  if (!code) {
+    return
+  }
+  const next = new Set(favoriteCodes.value)
+  try {
+    if (favoriteCodes.value.has(code)) {
+      await favoriteApi.remove(code)
+      next.delete(code)
+    } else {
+      await favoriteApi.add(code)
+      next.add(code)
+    }
+    favoriteCodes.value = next
+  } catch (error) {
+    console.error('관심종목 변경 실패:', error)
+  }
 }
 
 const goToCompany = (item) => {
-  router.push(`/company/${item.symbol}`)
+  router.push(`/company/${item.stockCode}`)
 }
 
 onMounted(() => {
-  // Reset scroll position of results container
-  const resultsContainer = document.querySelector('.results-container')
-  if (resultsContainer) {
-    resultsContainer.scrollTop = 0
-  }
+  loadFavorites()
 })
 </script>
 
@@ -71,8 +159,10 @@ onMounted(() => {
           type="text"
           class="search-input"
           placeholder="종목명(종목코드)"
+          :disabled="!isDomestic"
+          @keyup.enter="handleSearch"
         />
-        <button class="search-btn">
+        <button class="search-btn" :disabled="!isDomestic || searching" @click="handleSearch">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
             <circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/>
             <path d="M21 21L16.5 16.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -82,18 +172,23 @@ onMounted(() => {
 
       <!-- Results List -->
       <div class="results-container">
-        <div v-if="filteredResults.length === 0" class="empty-state">
+        <!-- 해외 주식: 추후 지원 -->
+        <div v-if="!isDomestic" class="empty-state">
+          <p class="empty-text">해외 주식 검색 (추후 지원)</p>
+        </div>
+
+        <div v-else-if="filteredResults.length === 0" class="empty-state">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none">
             <circle cx="11" cy="11" r="7" stroke="var(--color-text-tertiary)" stroke-width="2"/>
             <path d="M21 21L16.5 16.5" stroke="var(--color-text-tertiary)" stroke-width="2" stroke-linecap="round"/>
           </svg>
-          <p class="empty-text">검색 결과가 없습니다</p>
+          <p class="empty-text">{{ searchError || (searching ? '검색 중...' : '검색 결과가 없습니다') }}</p>
         </div>
 
         <div v-else class="results-list">
           <div
             v-for="(item, idx) in filteredResults"
-            :key="item.symbol"
+            :key="item.stockCode"
             class="result-item"
             @click="goToCompany(item)"
           >
@@ -107,22 +202,28 @@ onMounted(() => {
                       <stop offset="100%" :stop-color="idx % 3 === 0 ? '#1E40AF' : idx % 3 === 1 ? '#047857' : '#D97706'"/>
                     </linearGradient>
                   </defs>
-                  <text x="20" y="26" font-size="16" font-weight="bold" fill="white" text-anchor="middle">{{ item.name.charAt(0) }}</text>
+                  <text x="20" y="26" font-size="16" font-weight="bold" fill="white" text-anchor="middle">{{ (item.stockName || '?').charAt(0) }}</text>
                 </svg>
               </div>
               <div class="item-info">
-                <span class="item-name">{{ item.name }}</span>
-                <span class="item-symbol">{{ item.symbol }}</span>
+                <span class="item-name">{{ item.stockName }}</span>
+                <span class="item-symbol">{{ item.stockCode }}</span>
               </div>
             </div>
             <div class="item-right">
-              <div class="item-price">{{ formatNumber(priceData.currentPrice) }}원</div>
-              <div :class="['item-change', priceData.change >= 0 ? 'positive' : 'negative']">
-                {{ priceData.change >= 0 ? '+' : '' }}{{ priceData.changePercent }}%
-              </div>
+              <template v-if="getPriceInfo(item.stockCode) && !getPriceInfo(item.stockCode).loading && getPriceInfo(item.stockCode).currentPrice !== null">
+                <div class="item-price">{{ formatNumber(getPriceInfo(item.stockCode).currentPrice) }}원</div>
+                <div
+                  v-if="getPriceInfo(item.stockCode).changeRate !== null && getPriceInfo(item.stockCode).changeRate !== undefined"
+                  :class="['item-change', Number(getPriceInfo(item.stockCode).changeRate) >= 0 ? 'positive' : 'negative']"
+                >
+                  {{ Number(getPriceInfo(item.stockCode).changeRate) >= 0 ? '+' : '' }}{{ getPriceInfo(item.stockCode).changeRate }}%
+                </div>
+              </template>
+              <div v-else class="item-price">—</div>
             </div>
             <button class="star-btn" @click.stop="toggleFavorite(item)">
-              <svg width="18" height="18" viewBox="0 0 24 24" :fill="item.isFavorite ? '#F59E0B' : 'none'" :stroke="item.isFavorite ? 'none' : '#64748B'" stroke-width="2">
+              <svg width="18" height="18" viewBox="0 0 24 24" :fill="isFavorite(item.stockCode) ? '#F59E0B' : 'none'" :stroke="isFavorite(item.stockCode) ? 'none' : '#64748B'" stroke-width="2">
                 <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/>
               </svg>
             </button>
@@ -185,6 +286,16 @@ onMounted(() => {
 
 .search-btn:hover {
   color: var(--color-text-primary);
+}
+
+.search-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.search-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .search-input {

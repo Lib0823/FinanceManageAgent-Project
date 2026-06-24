@@ -132,20 +132,24 @@ export const tradingApi = {
   sell: (order) => api.post('/trading/sell', order),
   getHistory: (config) => api.get('/trading/history', config),
   getRecentTrades: (config) => api.get('/trading/recent', config),
-  getHoldings: () => api.get('/trading/holdings')
+  getHoldings: () => api.get('/trading/holdings'),
+  getPendingOrders: () => api.get('/trading/pending-orders'),
+  getOrderable: (stockCode, price) => api.get('/trading/orderable', { params: { stockCode, price } })
 }
 
-// ========== APIs below are not yet implemented in api-server ==========
-// TODO: Implement these endpoints in api-server
+// Stock API (Spring Boot api-server)
+export const stockApi = {
+  search: (q) => api.get('/stocks/search', { params: { q } }),
+  getPrice: (stockCode) => api.get(`/stocks/${stockCode}/price`),
+  getOrderbook: (stockCode) => api.get(`/stocks/${stockCode}/orderbook`)
+}
 
-// Stock API (Not implemented)
-// export const stockApi = {
-//   getList: (params) => api.get('/stocks', { params }),
-//   getDetail: (symbol) => api.get(`/stocks/${symbol}`),
-//   getPrice: (symbol) => api.get(`/stocks/${symbol}/price`),
-//   getChart: (symbol, period) => api.get(`/stocks/${symbol}/chart`, { params: { period } }),
-//   search: (query) => api.get('/stocks/search', { params: { q: query } })
-// }
+// Favorite API (Spring Boot api-server)
+export const favoriteApi = {
+  list: () => api.get('/favorites'),
+  add: (stockCode) => api.post('/favorites', { stockCode }),
+  remove: (stockCode) => api.delete(`/favorites/${stockCode}`)
+}
 
 // Company API (Spring Boot api-server)
 export const companyApi = {

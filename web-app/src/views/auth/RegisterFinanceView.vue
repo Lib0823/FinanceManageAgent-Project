@@ -154,7 +154,7 @@ const handleRegister = async () => {
     }
 
     // API 호출
-    const response = await authApi.register(registrationData)
+    await authApi.register(registrationData)
 
     Toast.success('회원가입이 완료되었습니다')
 

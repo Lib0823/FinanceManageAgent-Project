@@ -635,14 +635,6 @@ const loadStockDetail = async () => {
   }
 }
 
-const goToNews = () => {
-  router.push(`/news?symbol=${symbol.value}`)
-}
-
-const goToTrade = () => {
-  router.push(`/trading/${symbol.value}`)
-}
-
 onMounted(() => {
   // Check if AI analysis tab should be shown
   if (route.query.showAiAnalysis === 'true') {
