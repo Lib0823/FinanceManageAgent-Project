@@ -172,7 +172,7 @@ exception/    GlobalExceptionHandler, BusinessException, ErrorCode 등
 
 ## Database Schema
 
-**실제 테이블: 17개 + 뷰 4개** (Liquibase가 8개 changelog로 생성). 전체 목록·관계는 [`database/README.md`](database/README.md), DDL 스냅샷은 [`database/schema.sql`](database/schema.sql)(자동 생성 — `database/generate-schema.sh`).
+**실제 테이블: 19개 + 뷰 4개** (Liquibase가 9개 changelog로 생성). 전체 목록·관계는 [`database/README.md`](database/README.md), DDL 스냅샷은 [`database/schema.sql`](database/schema.sql)(자동 생성 — `database/generate-schema.sh`).
 
 | 그룹 | 테이블 |
 |------|--------|
@@ -180,9 +180,10 @@ exception/    GlobalExceptionHandler, BusinessException, ErrorCode 등
 | 분석 데이터 | `stock_filter_score`, `stock_financial`, `news_analysis`, `prophet_forecast`, `ai_trade_decision`, `safety_filter_result` |
 | 웹 표시용 | `market_daily_summary`, `stock_realtime_price`, `user_holdings` |
 | 매매 실행 | `trade_execution_plan`, `feature_threshold_config`, `trade_history` |
+| 검색 & 관심종목 | `stock_master`, `user_favorites` |
 | 뷰 | `v_latest_trade_plan`, `v_decision_with_filter` |
 
-> 이전 CLAUDE.md는 "8개 테이블"과 `database-erd.sql`/`database-erd-diagram.md`를 참조했으나, 실제 파일은 `database/schema.sql`이며 테이블은 17개입니다.
+> 이전 CLAUDE.md는 "8개 테이블"과 `database-erd.sql`/`database-erd-diagram.md`를 참조했으나, 실제 파일은 `database/schema.sql`이며 테이블은 19개입니다(v1.8에서 `stock_master`/`user_favorites` 추가).
 
 ## Technology Stack Summary
 
@@ -192,7 +193,7 @@ exception/    GlobalExceptionHandler, BusinessException, ErrorCode 등
 | Backend API | Spring Boot 4.1, Java 21, Spring Data JPA, Spring Security + JWT(jjwt 0.12.3), Jasypt, Liquibase, PostgreSQL, Gradle |
 | AI Pipeline | Python 3.11+, FastAPI, APScheduler, pandas, NumPy, scikit-learn, Prophet, transformers (KR-FinBERT), matplotlib |
 | AI Model | Gemini API (free tier) |
-| Database | PostgreSQL 16 (17 tables + 4 views) |
+| Database | PostgreSQL 16 (19 tables + 4 views) |
 | Search | Elasticsearch 8.x (확장 예정) |
 | Infra | Docker, Docker Compose |
 | External APIs | KIS Developers (mock trading), DART (financial data) |

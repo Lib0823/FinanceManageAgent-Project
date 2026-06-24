@@ -88,9 +88,14 @@
 ### 📊 거래/매매
 | 기능 | api-server | web-app | 연동 |
 |------|-----------|---------|------|
-| 거래내역 (`GET /trading/history`, KIS `VTTC0081R`) | ✅ | `TransactionsView` | ✅ |
-| 매수 (`POST /trading/buy`, KIS `VTTC0802U`) | ✅ | ⏸️ | ⏸️ |
-| 매도 (`POST /trading/sell`, KIS `VTTC0801U`) | ✅ | ⏸️ | ⏸️ |
+| 거래내역 (`GET /trading/history`, KIS `VTTC0081R`) | ✅ | `TransactionsView` (기간필터 동작) | ✅ |
+| 매수 (`POST /trading/buy`, KIS `VTTC0802U`) | ✅ | `TradingView` | ✅ |
+| 매도 (`POST /trading/sell`, KIS `VTTC0801U`) | ✅ | `TradingView` | ✅ |
+| 미체결 조회 (`GET /trading/pending-orders`, daily-ccld 필터) | ✅ | `TradingView`/`TransactionsView` | ✅ |
+| 실시간 호가 (`GET /stocks/{code}/orderbook`, KIS `FHKST01010200`) | ✅ | `TradingView` | ✅ |
+| 매수가능 조회 (`GET /trading/orderable`, KIS `VTTC8908R`) | ✅ | `TradingView` | ✅ |
+| 종목 검색·시세 (`/stocks/search`, `/stocks/{code}/price`) | ✅ | `SearchView` | ✅ |
+| 관심종목 (`/favorites` GET/POST/DELETE) | ✅ | `FavoritesView` | ✅ |
 
 > 거래내역은 데이터 정합성을 위해 **DB에 저장하지 않고 KIS API를 직접 조회**합니다. (TR_ID는 `VTTC0081R`이 올바른 값 — 구버전 `VTTC8001R`은 버그였고 수정됨. [`api-server/_docs/KIS_API_GUIDE.md`](../api-server/_docs/KIS_API_GUIDE.md))
 

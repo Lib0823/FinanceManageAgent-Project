@@ -1,0 +1,80 @@
+# web-app 화면별 개발 현황
+
+> 작성일: 2026-06-22
+> 완료 기준: **API 연동까지 끝나 더 개발할 게 없으면 ⭕ / 일부만 연동(나머지 mock·미구현)이면 🔺 / 화면(UI)만 있고 실 API 미연동이면 ❌**
+> 분석 방법: 각 화면이 `@/services/api` 의 실제 백엔드 엔드포인트를 호출해 응답을 렌더링하는지 vs `mockData`·하드코딩·TODO 인지 기준.
+
+## 요약
+
+총 21개 화면 기준. (TransferView 송금 화면은 제거됨 — 주식 MVP 범위 밖)
+
+| 상태 | 개수 | 화면 |
+|------|------|------|
+| ⭕ 완료 | 15 | LoginView, RegisterFinanceView, ResetPasswordView, ProfileView, BotView, CompanyDetailView, MarketAnalysisView, AssetsView, SettingsView, SearchView, FavoritesView, AssetDetailView, TermsView, TradingView, TransactionsView |
+| 🔺 부분 | 2 | RegisterView, HomeView |
+| ❌ UI만 | 4 | SplashView, WelcomeView, NewsView, NewsDetailView |
+
+> TradingView는 매수/매도 + 미체결 + 실시간 호가 + 주문가능 수량/금액까지 실데이터. 예약주문만 추후 지원.
+> 전 화면 공통: 해외주식·코인·예약주문·뉴스는 **추후 지원/제외**(실데이터 없음, 빈 데이터/라벨 처리, mock 주입 금지). 송금은 화면 자체 제거.
+
+---
+
+## 인증 (auth/)
+
+| 화면 | 상태 | 메모 |
+|------|:----:|------|
+| SplashView | ❌ | 네비게이션만 수행, API 통신 없음 (의도된 스플래시 화면) |
+| WelcomeView | ❌ | UI·네비게이션만. Face ID 로그인 버튼 미구현 |
+| LoginView | ⭕ | `authApi.login` 호출 + 토큰 저장 + 에러 처리 완비 |
+| RegisterView | 🔺 | 아이디/이메일 중복확인은 실 API(`checkUsername`/`checkEmail`). 실제 가입은 다음 단계(RegisterFinanceView)에서 처리 |
+| RegisterFinanceView | ⭕ | `validateKisAccount` + `register` 연동, KIS 계정 인증 후 가입 완료 |
+| TermsView | ⭕ | mock 토큰 제거 완료. 정보성 화면 + 동의 후 라우팅만 수행(토큰 미발급) |
+| ResetPasswordView | ⭕ | `authApi.resetPassword` 연동, 유효성·에러 처리 완비 |
+
+## 설정 (settings/)
+
+| 화면 | 상태 | 메모 |
+|------|:----:|------|
+| ProfileView | ⭕ | 프로필·KIS계정 조회/수정(`getProfile`,`getKisAccount`,`updateProfile`,`updateKisAccount`,`validateKisAccount`) 전부 실 API |
+| SettingsView | ⭕ | `getSettings`/`updateSettings`/`deleteAccount` 실 API. mockSettings 제거, 중립 기본값으로 초기화 후 응답으로 덮어씀 |
+
+## 메인 (main/)
+
+| 화면 | 상태 | 메모 |
+|------|:----:|------|
+| HomeView | 🔺 | 알림(`/trading/recent`)·뉴스·AI추천은 실 API. **국내지수/환율은 API 호출하나 해외지수·코인은 mockData 폴백** |
+| AssetsView | ⭕ | `assetApi.getBalance`/`getHoldings` 실 API로 자산요약 구성. mockAssetSummary 제거, `handleRefresh()`는 재로드. 채권·코인 카드는 "추후 지원"(금액 0), 7일 추이는 추세 엔드포인트 없어 숨김 |
+| BotView | ⭕ | 보유종목(`getHoldings`), AI분석(`getStockAnalysis` 병렬), 매매설정(`getTradeConfig`/`updateTradeConfig`) 전부 실 API |
+| SearchView | ⭕ | `stockApi.search`(종목 카탈로그) + `stockApi.getPrice`(항목별 시세) 실 API. mock 제거. 즐겨찾기 토글은 `favoriteApi.add/remove`. 해외 sub-tab "추후 지원" 비활성 |
+| FavoritesView | ⭕ | `favoriteApi.list/add/remove` 실 API. 목록 + 현재가/등락률(quote 비활성 시 "—") 표시. mock 차트/뉴스/재무 섹션 제거, 해외 "추후 지원" |
+
+## 상세 (detail/)
+
+| 화면 | 상태 | 메모 |
+|------|:----:|------|
+| AssetDetailView | ⭕ | 국내주식 실 API(`/assets/holdings`,`/assets/balance`). 미정의 `stockDetail` 버그 수정(balance summary 기반 값으로 대체). USD 하드코딩 제거(국내 KRW만), 해외 sub-tab "추후 지원" |
+| CompanyDetailView | ⭕ | AI분석(`getStockDetail`) + 기본정보/재무/공시(`companyApi` 3종) 전부 실 API |
+| TradingView | ⭕ | 매수/매도(`buy`/`sell`) + 미체결(`/trading/pending-orders`) + **실시간 호가**(`stockApi.getOrderbook` → `/stocks/{code}/orderbook`, KIS 10호가) + **주문가능 수량/금액**(`tradingApi.getOrderable` → `/trading/orderable`) 실데이터. 현재가 자동주입·총액 반응형·실시간 날짜. 예약주문만 추후 지원 |
+| TransactionsView | ⭕ | 거래내역 실 API(`getHistory`) + **기간필터(1주/1개월/3개월) 동작** + 미체결. 배당 수령·현금 입출금은 KIS OpenAPI에 전용 TR 없음(공식 확인) → 요약은 총매수/총매도만(기타 항목 제거) |
+| NewsView | ❌ | `mockTopNews` 사용. **뉴스 목록 API 미구현**, 필터링은 클라이언트만 |
+| NewsDetailView | ❌ | `mockNewsDetail` 사용. 상세 API 미구현(onMounted에 TODO만) |
+
+## 분석 (analysis/)
+
+| 화면 | 상태 | 메모 |
+|------|:----:|------|
+| MarketAnalysisView | ⭕ | `marketAnalysisApi` 6종(latest-date/summary/sentiment/decisions/heatmap/stock-detail) 전부 실 API 연동 |
+
+---
+
+## 백엔드 미구현으로 막힌 항목 (참고)
+
+화면을 마저 붙이려면 **api-server에 엔드포인트부터** 있어야 하는 것들:
+
+- **뉴스** (`/news/*`) — NewsView, NewsDetailView, HomeView 뉴스 일부
+- **해외주식·코인** — HomeView, AssetDetailView (추후 지원/제외 — 실데이터 없이 빈 데이터/라벨)
+- **배당 수령·현금 입출금 내역** — KIS OpenAPI에 개인 ledger 전용 TR **없음**(공식 확인). 배당은 종목 기준 '배당일정'(HHKDB669102C0)만 존재 → 별도 '배당 캘린더' 기능으로만 가능, 거래내역 기타 금액으로는 불가
+- **실시간 시세/체결통보 소켓** — KIS WebSocket 미구현(현재 REST 폴링). 실시간 호가·체결 푸시 없음
+
+> 해결됨: 종목 검색(`/stocks/search`, `/stocks/{code}/price`), 즐겨찾기(`/favorites`), 미체결주문(`/trading/pending-orders`), **실시간 호가**(`/stocks/{code}/orderbook` — KIS FHKST01010200), **매수가능 조회**(`/trading/orderable` — KIS VTTC8908R)가 api-server에 추가됨.
+> 제거됨: 송금/이체(TransferView) — 화면·라우트·진입버튼 전부 삭제.
