@@ -2,6 +2,8 @@ package com.inbeom.apiserver.controller;
 
 import com.inbeom.apiserver.dto.common.ApiResponse;
 import com.inbeom.apiserver.dto.trade.BalanceSummaryResponse;
+import com.inbeom.apiserver.dto.trade.OrderableResponse;
+import com.inbeom.apiserver.dto.trade.PendingOrderResponse;
 import com.inbeom.apiserver.dto.trade.RecentTradeResponse;
 import com.inbeom.apiserver.dto.trade.TradeHistoryResponse;
 import com.inbeom.apiserver.dto.trade.TradeRequest;
@@ -13,6 +15,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
@@ -130,6 +133,45 @@ public class TradingController {
 
         return ResponseEntity.ok(
                 ApiResponse.success("Holdings retrieved successfully", holdings)
+        );
+    }
+
+    /**
+     * GET /api/trading/pending-orders
+     * 미체결 주문 조회. KIS 주식일별주문체결조회(VTTC0081R) 결과 중 미체결(잔량 > 0, PENDING/PARTIAL)만 반환.
+     */
+    @GetMapping("/pending-orders")
+    public ResponseEntity<ApiResponse<List<PendingOrderResponse>>> getPendingOrders(
+            @RequestHeader("Authorization") String authHeader
+    ) {
+        String token = authHeader.substring(7);
+        Long userId = jwtTokenProvider.getUserIdFromToken(token);
+
+        List<PendingOrderResponse> pendingOrders = tradingService.getPendingOrders(userId);
+
+        return ResponseEntity.ok(
+                ApiResponse.success("Pending orders retrieved successfully", pendingOrders)
+        );
+    }
+
+    /**
+     * GET /api/trading/orderable?stockCode={code}&price={price}
+     * 매수가능조회 (KIS VTTC8908R). 최대매수수량/주문가능현금 조회.
+     * price 미지정 시 0(시장가 기준)으로 조회한다.
+     */
+    @GetMapping("/orderable")
+    public ResponseEntity<ApiResponse<OrderableResponse>> getOrderable(
+            @RequestHeader("Authorization") String authHeader,
+            @RequestParam("stockCode") String stockCode,
+            @RequestParam(value = "price", required = false) BigDecimal price
+    ) {
+        String token = authHeader.substring(7);
+        Long userId = jwtTokenProvider.getUserIdFromToken(token);
+
+        OrderableResponse orderable = tradingService.getOrderable(userId, stockCode, price);
+
+        return ResponseEntity.ok(
+                ApiResponse.success("Orderable info retrieved successfully", orderable)
         );
     }
 }

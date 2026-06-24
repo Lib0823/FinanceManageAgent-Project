@@ -6,6 +6,8 @@ import com.inbeom.apiserver.dto.kis.KisBalanceResponse;
 import com.inbeom.apiserver.dto.kis.KisDailyCcldResponse;
 import com.inbeom.apiserver.dto.trade.BalanceSummaryResponse;
 import com.inbeom.apiserver.dto.trade.HoldingResponse;
+import com.inbeom.apiserver.dto.trade.OrderableResponse;
+import com.inbeom.apiserver.dto.trade.PendingOrderResponse;
 import com.inbeom.apiserver.dto.trade.RecentTradeResponse;
 import com.inbeom.apiserver.dto.trade.TradeHistoryResponse;
 import com.inbeom.apiserver.exception.UserNotFoundException;
@@ -192,6 +194,141 @@ public class TradingService {
     }
 
     /**
+     * Get pending (unfilled) orders from KIS API (VTTC0081R).
+     * PM 결정 1: 신규 KIS TR 도입 금지. getTradeHistory 와 동일한 inquire-daily-ccld 경로를 재사용하고,
+     * 결과 중 미체결(취소 제외, 잔량 > 0 또는 orderStatus PENDING/PARTIAL)인 행만 반환한다.
+     * 예외/빈결과/rt_cd != 0 시 빈 리스트로 graceful 처리한다.
+     */
+    public List<PendingOrderResponse> getPendingOrders(Long userId) {
+        try {
+            User user = userRepository.findById(userId)
+                    .orElseThrow(() -> new UserNotFoundException(userId));
+
+            // 1. Get KIS account from user
+            Long kisAccountId = user.getKisAccount().getId();
+
+            // 2. Get KIS credentials and token
+            String kisToken = kisAuthService.getKisAccessToken(kisAccountId);
+            KisCredentials credentials = kisAuthService.getKisCredentials(kisAccountId);
+
+            // 3. Build query parameters for last 3 months (getTradeHistory 와 동일)
+            LocalDate endDate = LocalDate.now();
+            LocalDate startDate = endDate.minusMonths(3);
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMdd");
+
+            Map<String, String> queryParams = new HashMap<>();
+            queryParams.put("CANO", credentials.accountNumber());
+            queryParams.put("ACNT_PRDT_CD", credentials.accountProductCode());
+            queryParams.put("INQR_STRT_DT", startDate.format(formatter));
+            queryParams.put("INQR_END_DT", endDate.format(formatter));
+            queryParams.put("SLL_BUY_DVSN_CD", "00");  // 00: 전체, 01: 매도, 02: 매수
+            queryParams.put("INQR_DVSN", "00");  // 00: 역순
+            queryParams.put("PDNO", "");  // 전체 종목
+            queryParams.put("CCLD_DVSN", "02");  // 00: 전체, 01: 체결, 02: 미체결
+            queryParams.put("ORD_GNO_BRNO", "");
+            queryParams.put("ODNO", "");
+            queryParams.put("INQR_DVSN_3", "00");
+            queryParams.put("INQR_DVSN_1", "");
+            queryParams.put("CTX_AREA_FK100", "");
+            queryParams.put("CTX_AREA_NK100", "");
+
+            // 4. Call KIS API
+            ResponseEntity<KisDailyCcldResponse> response = kisApiClient.get(
+                    "/uapi/domestic-stock/v1/trading/inquire-daily-ccld",
+                    "VTTC0081R",  // 주식일별주문체결조회 (모의투자)
+                    kisToken,
+                    credentials.appKey(),
+                    credentials.appSecret(),
+                    queryParams,
+                    KisDailyCcldResponse.class
+            );
+
+            // 5. Validate response
+            KisDailyCcldResponse body = response.getBody();
+            if (body == null || body.getOutput1() == null) {
+                log.warn("Empty pending orders response from KIS API for userId={}", userId);
+                return new ArrayList<>();
+            }
+            if (body.getRtCd() != null && !"0".equals(body.getRtCd())) {
+                log.warn("KIS pending orders rt_cd={} msg={} for userId={}", body.getRtCd(), body.getMsg1(), userId);
+                return new ArrayList<>();
+            }
+
+            // 6. Filter unfilled rows (취소 제외, 잔량 > 0 또는 PENDING/PARTIAL) and map
+            return body.getOutput1().stream()
+                    .filter(this::isPending)
+                    .map(this::mapToPendingOrderResponse)
+                    .collect(Collectors.toList());
+        } catch (Exception e) {
+            log.warn("Failed to load pending orders from KIS API for userId={}: {}", userId, e.getMessage());
+            return new ArrayList<>();
+        }
+    }
+
+    /**
+     * 미체결 판정: 취소된 주문은 제외하고, 잔여수량(rmn_qty) > 0 이거나
+     * 주문상태가 PENDING/PARTIAL(총체결수량 < 주문수량)인 경우 미체결로 본다.
+     */
+    private boolean isPending(KisDailyCcldResponse.DailyCcldItem item) {
+        if ("Y".equals(item.getCnclYn())) {
+            return false;
+        }
+        int remain = calcRemainQuantity(item);
+        if (remain > 0) {
+            return true;
+        }
+        int totalQty = parseIntSafely(item.getTotCcldQty());
+        int orderQty = parseIntSafely(item.getOrdQty());
+        // PENDING(미체결) 또는 PARTIAL(일부체결) → 총체결수량 < 주문수량
+        return orderQty > 0 && totalQty < orderQty;
+    }
+
+    /**
+     * 잔여수량 계산: KIS rmn_qty 우선, 없거나 0이면 주문수량 - 총체결수량으로 보정.
+     */
+    private int calcRemainQuantity(KisDailyCcldResponse.DailyCcldItem item) {
+        int rmnQty = parseIntSafely(item.getRmnQty());
+        if (rmnQty > 0) {
+            return rmnQty;
+        }
+        int orderQty = parseIntSafely(item.getOrdQty());
+        int totalQty = parseIntSafely(item.getTotCcldQty());
+        return Math.max(orderQty - totalQty, 0);
+    }
+
+    /**
+     * Map KIS DailyCcldItem to PendingOrderResponse
+     */
+    private PendingOrderResponse mapToPendingOrderResponse(KisDailyCcldResponse.DailyCcldItem item) {
+        DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("yyyyMMdd");
+        DateTimeFormatter timeFormatter = DateTimeFormatter.ofPattern("HHmmss");
+        DateTimeFormatter displayFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+        LocalDate orderDate = LocalDate.parse(item.getOrdDt(), dateFormatter);
+        LocalDateTime orderedAt;
+        if (item.getOrdTmd() != null && !item.getOrdTmd().isEmpty()) {
+            String ordTmd = item.getOrdTmd().length() == 6 ? item.getOrdTmd() : String.format("%06d", Integer.parseInt(item.getOrdTmd()));
+            orderedAt = LocalDateTime.of(orderDate, java.time.LocalTime.parse(ordTmd, timeFormatter));
+        } else {
+            orderedAt = orderDate.atStartOfDay();
+        }
+
+        // 01=매도(SELL), 02=매수(BUY)
+        String orderType = "02".equals(item.getSllBuyDvsnCd()) ? "BUY" : "SELL";
+
+        return PendingOrderResponse.builder()
+                .orderNumber(item.getOdno())
+                .stockCode(item.getPdno())
+                .stockName(item.getPrdtName())
+                .orderType(orderType)
+                .orderQuantity(parseIntSafely(item.getOrdQty()))
+                .remainQuantity(calcRemainQuantity(item))
+                .orderPrice(parseBigDecimalSafely(item.getOrdUnpr()))
+                .orderedAt(orderedAt.format(displayFormatter))
+                .build();
+    }
+
+    /**
      * Map KIS DailyCcldItem to TradeHistoryResponse
      */
     private TradeHistoryResponse mapToTradeHistoryResponse(KisDailyCcldResponse.DailyCcldItem item) {
@@ -247,6 +384,121 @@ public class TradingService {
                 .orderDate(orderDate.format(dateDisplayFormatter))
                 .orderTime(orderedAt.toLocalTime().format(timeDisplayFormatter))
                 .build();
+    }
+
+    /**
+     * 매수가능조회 (VTTC8908R, 모의). userId → KIS 계좌/토큰/자격증명 해석 후 inquire-psbl-order 호출.
+     * KIS output 매핑: max_buy_qty→maxBuyQuantity, ord_psbl_cash→orderableCash.
+     * 예외/rt_cd != 0 시 0 + notice 로 graceful degrade 한다 (절대 예외 전파하지 않음).
+     *
+     * @param price 주문단가(지정가). null/0 이면 "0" 전송.
+     */
+    public OrderableResponse getOrderable(Long userId, String stockCode, BigDecimal price) {
+        try {
+            User user = userRepository.findById(userId)
+                    .orElseThrow(() -> new UserNotFoundException(userId));
+
+            // 1. Get KIS account from user
+            Long kisAccountId = user.getKisAccount().getId();
+
+            // 2. Get KIS credentials and token
+            String kisToken = kisAuthService.getKisAccessToken(kisAccountId);
+            KisCredentials credentials = kisAuthService.getKisCredentials(kisAccountId);
+
+            // 3. Build query parameters
+            String ordUnpr = (price == null || price.compareTo(BigDecimal.ZERO) == 0)
+                    ? "0"
+                    : price.toPlainString();
+
+            Map<String, String> queryParams = new HashMap<>();
+            queryParams.put("CANO", credentials.accountNumber());
+            queryParams.put("ACNT_PRDT_CD", credentials.accountProductCode());
+            queryParams.put("PDNO", stockCode);
+            queryParams.put("ORD_UNPR", ordUnpr);
+            queryParams.put("ORD_DVSN", "00");  // 00: 지정가
+            queryParams.put("CMA_EVLU_AMT_ICLD_YN", "N");  // CMA평가금액포함여부
+            queryParams.put("OVRS_ICLD_YN", "N");  // 해외포함여부
+
+            // 4. Call KIS API
+            ResponseEntity<Map> response = kisApiClient.get(
+                    "/uapi/domestic-stock/v1/trading/inquire-psbl-order",
+                    "VTTC8908R",  // 매수가능조회 (모의투자, convertTrId 가 VTTC↔TTTC 처리)
+                    kisToken,
+                    credentials.appKey(),
+                    credentials.appSecret(),
+                    queryParams,
+                    Map.class
+            );
+
+            // 5. Validate response
+            Map<String, Object> body = response.getBody();
+            if (body == null || !"0".equals(String.valueOf(body.get("rt_cd")))) {
+                log.warn("KIS inquire-psbl-order rt_cd={} msg={} for userId={}, stockCode={}",
+                        body != null ? body.get("rt_cd") : "null",
+                        body != null ? body.get("msg1") : "null body", userId, stockCode);
+                return orderableFailure(stockCode);
+            }
+
+            Object output = body.get("output");
+            if (!(output instanceof Map)) {
+                log.warn("KIS inquire-psbl-order missing output for userId={}, stockCode={}", userId, stockCode);
+                return orderableFailure(stockCode);
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> outputMap = (Map<String, Object>) output;
+
+            return OrderableResponse.builder()
+                    .stockCode(stockCode)
+                    .maxBuyQuantity(parseLongSafely(asString(outputMap.get("max_buy_qty"))))
+                    .orderableCash(parseLongSafely(asString(outputMap.get("ord_psbl_cash"))))
+                    .build();
+        } catch (Exception e) {
+            log.warn("Failed to load orderable info from KIS API for userId={}, stockCode={}: {}",
+                    userId, stockCode, e.getMessage());
+            return orderableFailure(stockCode);
+        }
+    }
+
+    /**
+     * 매수가능조회 실패 시 0 + 안내 메시지로 degrade.
+     */
+    private OrderableResponse orderableFailure(String stockCode) {
+        return OrderableResponse.builder()
+                .stockCode(stockCode)
+                .maxBuyQuantity(0L)
+                .orderableCash(0L)
+                .notice("주문가능 정보를 불러오지 못했습니다")
+                .build();
+    }
+
+    /**
+     * KIS output 값(Object)을 trim 된 String 으로 변환. null/공백이면 null.
+     */
+    private String asString(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String s = String.valueOf(value).trim();
+        return s.isEmpty() ? null : s;
+    }
+
+    /**
+     * Safely parse String to Long (콤마 제거, 소수점 절삭). 실패 시 0.
+     */
+    private long parseLongSafely(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return 0L;
+        }
+        try {
+            String cleaned = value.trim().replace(",", "");
+            if (cleaned.contains(".")) {
+                return (long) Double.parseDouble(cleaned);
+            }
+            return Long.parseLong(cleaned);
+        } catch (NumberFormatException e) {
+            log.warn("Failed to parse long: {}", value);
+            return 0L;
+        }
     }
 
     /**
