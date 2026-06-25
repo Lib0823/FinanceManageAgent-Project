@@ -1,6 +1,6 @@
 # API 설계서
 
-> Spring Boot API Server가 제공하는 REST API의 전체 명세입니다. 코드에 실제로 존재하는 11개 컨트롤러, 49개 엔드포인트만 기술합니다.
+> Spring Boot API Server가 제공하는 REST API의 전체 명세입니다. 코드에 실제로 존재하는 12개 컨트롤러, 52개 엔드포인트만 기술합니다. (OverseasController 포함)
 
 ## 목차
 1. [공통 규칙](#1-공통-규칙)
@@ -15,10 +15,11 @@
    - [CompanyController (/company)](#55-companycontroller-company)
    - [StockController (/stocks)](#56-stockcontroller-stocks)
    - [FavoriteController (/favorites)](#57-favoritecontroller-favorites)
-   - [MarketAnalysisController (/market)](#58-marketanalysiscontroller-market)
-   - [MarketDataController (/market)](#59-marketdatacontroller-market)
-   - [HealthController (/health)](#510-healthcontroller-health)
-   - [TestController (/test)](#511-testcontroller-test)
+   - [OverseasController (/overseas)](#58-overseascontroller-overseas)
+   - [MarketAnalysisController (/market)](#59-marketanalysiscontroller-market)
+   - [MarketDataController (/market)](#510-marketdatacontroller-market)
+   - [HealthController (/health)](#511-healthcontroller-health)
+   - [TestController (/test)](#512-testcontroller-test)
 6. [관련 문서](#6-관련-문서)
 
 ---
@@ -91,8 +92,8 @@ ErrorCode 대역 구분:
 
 | 구분 | 경로 |
 |------|------|
-| PUBLIC (permitAll) | `/health`, `/health/**`, `/auth/**`, `/actuator/**`, `/test/**`, `/market/**`, `/company/**`, `/stocks/**` |
-| AUTH 필요 | `/users/**`, `/assets/**`, `/trading/**`, `/favorites/**` 등 그 외 전부 |
+| PUBLIC (permitAll) | `/health`, `/health/**`, `/auth/**`, `/actuator/**`, `/test/**`, `/market/**`, `/company/**`, `/stocks/**`, `/overseas/stocks/**` |
+| AUTH 필요 | `/users/**`, `/assets/**`, `/trading/**`, `/favorites/**`, `/overseas/**`(`/overseas/stocks/**` 제외) 등 그 외 전부 |
 
 AUTH가 필요한 엔드포인트는 `Authorization: Bearer {JWT}` 헤더를 요구하며, 토큰 claims의 `userId` / `kisAccountId`를 서버에서 추출해 사용합니다. (상세는 [AUTHENTICATION_FLOW.md](AUTHENTICATION_FLOW.md))
 
@@ -172,7 +173,7 @@ AUTH가 필요한 엔드포인트는 `Authorization: Bearer {JWT}` 헤더를 요
 
 | Method | Path | 요청 Param | 응답 data(T) | 설명 |
 |--------|------|-----------|--------------|------|
-| GET | `/stocks/search?q=` | query `q` | `List<StockSearchResponse>{stockCode, stockName, market}` | code prefix OR name contains(ignore-case), 최대 30건 |
+| GET | `/stocks/search?q=&market=` | query `q`, `market`(opt) | `List<StockSearchResponse>{stockCode, stockName, market}` | code prefix OR name contains(ignore-case), 최대 30건. `market=US`면 해외(USD) 종목, 그 외/미지정은 국내(KRW) 종목 검색 |
 | GET | `/stocks/{stockCode}/price` | - | `StockPriceResponse{stockCode, currentPrice, changeAmount, changeRate, notice?}` | KIS output 매핑: `stck_prpr`→currentPrice, `prdy_vrss`→changeAmount, `prdy_ctrt`→changeRate |
 | GET | `/stocks/{stockCode}/orderbook` | - | `OrderbookResponse{stockCode, currentPrice, asks:[{price,quantity}], bids:[{price,quantity}], notice}` | 실시간 호가(10단계 매도/매수 + 잔량) + 현재가. KIS `FHKST01010200` inquire-asking-price-exp-ccn (quote 도메인). quote 비활성 시 가격/호가 null + notice |
 
@@ -186,7 +187,20 @@ AUTH가 필요한 엔드포인트는 `Authorization: Bearer {JWT}` 헤더를 요
 | POST | `/favorites` | `AddFavoriteRequest{stockCode}` | `FavoriteResponse` | `stock_master`에서 종목명 해석, unique 충돌 시 멱등 처리 |
 | DELETE | `/favorites/{stockCode}` | - | `Void` | 관심종목 삭제 |
 
-### 5.8 MarketAnalysisController (/market)
+### 5.8 OverseasController (/overseas)
+
+해외주식(미국) 현재가/잔고/매수/매도. `/overseas/stocks/**`(현재가)는 PUBLIC, 나머지는 AUTH 필요(토큰의 `userId`). 모든 경로는 graceful degrade — 미연동/실패 시에도 200 + `notice`(주문은 `data.success=false`). 모의 지정가 전용, 해외 호가·실시간 시세 미지원, 미국 외 타국가 미지원. 현재가는 real quote 도메인 사용.
+
+| Method | Path | 요청 Body / Param | 응답 data(T) | 설명 | 인증 |
+|--------|------|-------------------|--------------|------|------|
+| GET | `/overseas/stocks/{symbol}/price?exchange=` | path `symbol`, query `exchange`(opt, 예 `NASD`) | `OverseasPriceResponse` | 해외 현재가상세. KIS `HHDFS76200200`(현재가 `HHDFS00000300`), quote real 도메인. 미연동 시 가격 null + notice | PUBLIC |
+| GET | `/overseas/balance` | - | `OverseasBalanceResponse` | 해외 잔고/보유. KIS `VTTS3012R`(모의 trading 도메인). 미지원/실패 시 빈 목록 + notice | AUTH |
+| POST | `/overseas/buy` | `OverseasOrderRequest` | `Map` | 미국 매수(지정가 전용). KIS `VTTT1002U`. 실패 시 `data.success=false` + notice | AUTH |
+| POST | `/overseas/sell` | `OverseasOrderRequest` | `Map` | 미국 매도(지정가 전용). KIS `VTTT1006U`. 실패 시 `data.success=false` + notice | AUTH |
+
+> `convertTrId`는 국내 `VTTC`↔`TTTC`만 교체하므로 해외 모의 TR은 V 변형(`VTTS3012R`/`VTTT1002U`/`VTTT1006U`)을 직접 사용합니다. 상세는 [KIS_API_GUIDE.md](KIS_API_GUIDE.md).
+
+### 5.9 MarketAnalysisController (/market)
 
 전체 PUBLIC. DB에 적재된 AI 분석 결과를 제공합니다. `date`는 선택적 `LocalDate` 파라미터입니다.
 
@@ -200,7 +214,7 @@ AUTH가 필요한 엔드포인트는 `Authorization: Bearer {JWT}` 헤더를 요
 | GET | `/market/stock-analysis/{stockCode}?date=` | `StockAnalysisResponse` | 단일 종목 미니 분석 (Bot 카드용) |
 | GET | `/market/stock-detail/{stockCode}?date=` | `StockDetailAnalysisResponse` | 3섹션 상세(정량/감성/시계열 D+1~D+5) |
 
-### 5.9 MarketDataController (/market)
+### 5.10 MarketDataController (/market)
 
 전체 PUBLIC. 외부 소스를 사용하며 실패 시 graceful degrade(부분 응답)합니다.
 
@@ -212,7 +226,7 @@ AUTH가 필요한 엔드포인트는 `Authorization: Bearer {JWT}` 헤더를 요
 
 > `/market` base 경로는 `MarketAnalysisController`와 `MarketDataController`가 분담합니다. 둘 다 PUBLIC입니다.
 
-### 5.10 HealthController (/health)
+### 5.11 HealthController (/health)
 
 전체 PUBLIC.
 
@@ -221,7 +235,7 @@ AUTH가 필요한 엔드포인트는 `Authorization: Bearer {JWT}` 헤더를 요
 | GET | `/health` | `Map{status, timestamp, version}` | 헬스 체크 |
 | GET | `/health/db` | `Map` | PostgreSQL 연결 테스트 |
 
-### 5.11 TestController (/test)
+### 5.12 TestController (/test)
 
 전체 PUBLIC, 개발 전용.
 

@@ -15,7 +15,8 @@
 | ❌ UI만 | 4 | SplashView, WelcomeView, NewsView, NewsDetailView |
 
 > TradingView는 매수/매도 + 미체결 + 실시간 호가 + 주문가능 수량/금액까지 실데이터. 예약주문만 추후 지원.
-> 전 화면 공통: 해외주식·코인·예약주문·뉴스는 **추후 지원/제외**(실데이터 없음, 빈 데이터/라벨 처리, mock 주입 금지). 송금은 화면 자체 제거.
+> **해외주식(US) 지원**: AssetDetailView 해외탭, SearchView 해외, TradingView 미국 지정가 매매까지 실데이터 연동. **해외 호가·실시간 시세·미국 외 타국가 시장은 미지원**(현재가는 real quote 도메인 사용). 코인은 비활성 유지.
+> 전 화면 공통: 코인·예약주문·뉴스는 **추후 지원/제외**(실데이터 없음, 빈 데이터/라벨 처리, mock 주입 금지). 송금은 화면 자체 제거.
 
 ---
 
@@ -42,19 +43,19 @@
 
 | 화면 | 상태 | 메모 |
 |------|:----:|------|
-| HomeView | 🔺 | 알림(`/trading/recent`)·뉴스·AI추천은 실 API. **국내지수/환율은 API 호출하나 해외지수·코인은 mockData 폴백** |
+| HomeView | 🔺 | 알림(`/trading/recent`)·뉴스·AI추천은 실 API. **국내지수/환율은 API 호출하나 해외지수·코인은 mockData 폴백**(개별 미국 종목 매매/표시/검색은 `/overseas/*`·`/stocks/search?market=`로 실데이터, 해외지수 위젯은 별도) |
 | AssetsView | ⭕ | `assetApi.getBalance`/`getHoldings` 실 API로 자산요약 구성. mockAssetSummary 제거, `handleRefresh()`는 재로드. 채권·코인 카드는 "추후 지원"(금액 0), 7일 추이는 추세 엔드포인트 없어 숨김 |
 | BotView | ⭕ | 보유종목(`getHoldings`), AI분석(`getStockAnalysis` 병렬), 매매설정(`getTradeConfig`/`updateTradeConfig`) 전부 실 API |
-| SearchView | ⭕ | `stockApi.search`(종목 카탈로그) + `stockApi.getPrice`(항목별 시세) 실 API. mock 제거. 즐겨찾기 토글은 `favoriteApi.add/remove`. 해외 sub-tab "추후 지원" 비활성 |
-| FavoritesView | ⭕ | `favoriteApi.list/add/remove` 실 API. 목록 + 현재가/등락률(quote 비활성 시 "—") 표시. mock 차트/뉴스/재무 섹션 제거, 해외 "추후 지원" |
+| SearchView | ⭕ | `stockApi.search`(종목 카탈로그) + `stockApi.getPrice`(항목별 시세) 실 API. mock 제거. 즐겨찾기 토글은 `favoriteApi.add/remove`. **해외(US) sub-tab 실데이터** — `market=` 파라미터로 미국 종목 검색 |
+| FavoritesView | ⭕ | `favoriteApi.list/add/remove` 실 API. 목록 + 현재가/등락률(quote 비활성 시 "—") 표시. mock 차트/뉴스/재무 섹션 제거 |
 
 ## 상세 (detail/)
 
 | 화면 | 상태 | 메모 |
 |------|:----:|------|
-| AssetDetailView | ⭕ | 국내주식 실 API(`/assets/holdings`,`/assets/balance`). 미정의 `stockDetail` 버그 수정(balance summary 기반 값으로 대체). USD 하드코딩 제거(국내 KRW만), 해외 sub-tab "추후 지원" |
+| AssetDetailView | ⭕ | 국내주식 실 API(`/assets/holdings`,`/assets/balance`). 미정의 `stockDetail` 버그 수정(balance summary 기반 값으로 대체). **해외(US) 탭 실데이터** — `/overseas/*` 잔고 연동(USD 표기). 해외 호가/실시간 시세는 미지원 |
 | CompanyDetailView | ⭕ | AI분석(`getStockDetail`) + 기본정보/재무/공시(`companyApi` 3종) 전부 실 API |
-| TradingView | ⭕ | 매수/매도(`buy`/`sell`) + 미체결(`/trading/pending-orders`) + **실시간 호가**(`stockApi.getOrderbook` → `/stocks/{code}/orderbook`, KIS 10호가) + **주문가능 수량/금액**(`tradingApi.getOrderable` → `/trading/orderable`) 실데이터. 현재가 자동주입·총액 반응형·실시간 날짜. 예약주문만 추후 지원 |
+| TradingView | ⭕ | 매수/매도(`buy`/`sell`) + 미체결(`/trading/pending-orders`) + **실시간 호가**(`stockApi.getOrderbook` → `/stocks/{code}/orderbook`, KIS 10호가) + **주문가능 수량/금액**(`tradingApi.getOrderable` → `/trading/orderable`) 실데이터. 현재가 자동주입·총액 반응형·실시간 날짜. **해외(US) 지정가 매매** `/overseas/*` 연동(모의 지정가 전용, 해외 호가 미지원). 예약주문만 추후 지원 |
 | TransactionsView | ⭕ | 거래내역 실 API(`getHistory`) + **기간필터(1주/1개월/3개월) 동작** + 미체결. 배당 수령·현금 입출금은 KIS OpenAPI에 전용 TR 없음(공식 확인) → 요약은 총매수/총매도만(기타 항목 제거) |
 | NewsView | ❌ | `mockTopNews` 사용. **뉴스 목록 API 미구현**, 필터링은 클라이언트만 |
 | NewsDetailView | ❌ | `mockNewsDetail` 사용. 상세 API 미구현(onMounted에 TODO만) |
@@ -72,7 +73,9 @@
 화면을 마저 붙이려면 **api-server에 엔드포인트부터** 있어야 하는 것들:
 
 - **뉴스** (`/news/*`) — NewsView, NewsDetailView, HomeView 뉴스 일부
-- **해외주식·코인** — HomeView, AssetDetailView (추후 지원/제외 — 실데이터 없이 빈 데이터/라벨)
+- **해외주식(US)** — 표시/검색/매매 구현됨(`/overseas/*`, `/stocks/search?market=`). 단 해외 호가·실시간 시세·미국 외 타국가 시장은 미지원
+- **코인** — 비활성 유지(실데이터 없이 빈 데이터/라벨)
+- **해외지수 위젯(HomeView)** — 개별 종목과 별개로 여전히 mockData 폴백
 - **배당 수령·현금 입출금 내역** — KIS OpenAPI에 개인 ledger 전용 TR **없음**(공식 확인). 배당은 종목 기준 '배당일정'(HHKDB669102C0)만 존재 → 별도 '배당 캘린더' 기능으로만 가능, 거래내역 기타 금액으로는 불가
 - **실시간 시세/체결통보 소켓** — KIS WebSocket 미구현(현재 REST 폴링). 실시간 호가·체결 푸시 없음
 

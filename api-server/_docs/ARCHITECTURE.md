@@ -38,12 +38,15 @@ AI 분석 데이터의 **생성**은 별도 모듈(`ai-agent`, FastAPI 스케줄
 ```
 com.inbeom.apiserver
 ├── ApiServerApplication.java        # main 진입점
-├── controller/   (9)  # REST 엔드포인트
+├── controller/   (12)  # REST 엔드포인트
 │   ├── AuthController          /auth        (public)
 │   ├── UserController          /users       (auth)
 │   ├── AssetController         /assets      (auth)
 │   ├── TradingController       /trading     (auth)
 │   ├── CompanyController       /company     (public)
+│   ├── StockController         /stocks      (public)
+│   ├── FavoriteController      /favorites   (auth)
+│   ├── OverseasController      /overseas    (price public, 매매/잔고 auth) # 해외주식(US) 지정가
 │   ├── MarketAnalysisController /market     (public)
 │   ├── MarketDataController    /market      (public)
 │   ├── HealthController        /health      (public)
