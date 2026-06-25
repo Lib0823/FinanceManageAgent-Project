@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import AppHeader from '@/components/common/AppHeader.vue'
 import AssetTabs from '@/components/common/AssetTabs.vue'
-import { assetApi } from '@/services/api'
+import { assetApi, overseasApi, marketApi } from '@/services/api'
 
 const router = useRouter()
 const route = useRoute()
@@ -15,8 +15,14 @@ const errorMessage = ref('')
 // 국내 주식 데이터 (API에서 가져옴)
 const domesticStocks = ref([])
 
-// 해외 주식 데이터 (KIS 모의투자 미지원 → 추후 지원)
+// 해외 주식(US) 데이터 (overseasApi.getBalance() 기반, USD 원본)
 const overseasStocks = ref([])
+
+// 해외 안내 메시지 (quote 비활성 / 모의 해외매매 미지원 등 graceful degrade)
+const overseasNotice = ref('')
+
+// USD → KRW 환율 (marketApi.getExchangeRates() 의 USD rate, 없으면 null → 병기 생략)
+const usdRate = ref(null)
 
 // 현재 선택된 탭에 따른 주식 데이터
 const currentStocks = computed(() => {
@@ -32,19 +38,22 @@ const domesticSummary = ref({
   d2Deposit: 0
 })
 
-// 빈 요약 (해외 등 미지원 탭)
-const emptySummary = {
+// 해외 주식 요약 (USD 원본)
+const overseasSummary = ref({
   totalValuation: 0,
   totalProfit: 0,
   profitPercent: 0,
   totalPurchase: 0,
   d2Deposit: 0
-}
-
-// 현재 선택된 탭에 따른 요약 (해외는 추후 지원 → 빈 값)
-const currentSummary = computed(() => {
-  return tabs.value.sub === 'domestic' ? domesticSummary.value : emptySummary
 })
+
+// 현재 선택된 탭에 따른 요약
+const currentSummary = computed(() => {
+  return tabs.value.sub === 'domestic' ? domesticSummary.value : overseasSummary.value
+})
+
+// 현재 탭의 통화 단위
+const isOverseas = computed(() => tabs.value.sub !== 'domestic')
 
 // 현금 데이터 (API에서 가져옴, KRW만 지원)
 const cashDetail = ref({
@@ -108,6 +117,73 @@ const loadBalance = async () => {
   }
 }
 
+const num = (v) => {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : 0
+}
+
+// Load USD→KRW 환율 (있으면 KRW 병기, 없으면 생략 — graceful)
+const loadExchangeRate = async () => {
+  try {
+    const res = await marketApi.getExchangeRates()
+    const list = res && res.success && Array.isArray(res.data) ? res.data : []
+    const usd = list.find((r) => r && (r.currency === 'USD' || r.currency === 'USD/KRW'))
+    usdRate.value = usd && Number.isFinite(Number(usd.rate)) ? Number(usd.rate) : null
+  } catch (error) {
+    console.error('Failed to load exchange rate:', error)
+    usdRate.value = null
+  }
+}
+
+// Load overseas (US) balance — graceful degrade: 실패/notice 시 빈 목록 + 안내
+const loadOverseasBalance = async () => {
+  try {
+    const response = await overseasApi.getBalance()
+    // ApiResponse 봉투: { success, data: OverseasBalanceResponse }
+    const data = response?.data ?? null
+
+    if (!data) {
+      overseasStocks.value = []
+      overseasSummary.value = { ...overseasSummary.value, totalValuation: 0, totalProfit: 0, profitPercent: 0, totalPurchase: 0, d2Deposit: 0 }
+      overseasNotice.value = response?.notice || '해외 잔고를 불러올 수 없습니다'
+      return
+    }
+
+    overseasNotice.value = data.notice || ''
+
+    const holdings = Array.isArray(data.holdings) ? data.holdings : []
+    overseasStocks.value = holdings.map((h) => ({
+      symbol: h.symbol,
+      name: h.name || h.symbol,
+      nameEn: h.name || h.symbol,
+      exchange: h.exchange || h.ovrs_excg_cd || null,
+      currentPrice: num(h.currentPrice),
+      quantity: num(h.quantity),
+      orderableQty: num(h.orderableQty),
+      avgPrice: num(h.avgPrice),
+      purchasePrice: num(h.avgPrice) * num(h.quantity),
+      profit: num(h.evalProfitLoss),
+      profitPercent: num(h.profitLossRate),
+      logo: ''
+    }))
+
+    const totalPurchase = num(data.totalPurchase)
+    const totalProfit = num(data.totalProfitLoss)
+    overseasSummary.value = {
+      totalValuation: num(data.totalEval),
+      totalProfit,
+      profitPercent: totalPurchase > 0 ? (totalProfit / totalPurchase) * 100 : 0,
+      totalPurchase,
+      d2Deposit: 0
+    }
+  } catch (error) {
+    console.error('Failed to load overseas balance:', error)
+    overseasStocks.value = []
+    overseasSummary.value = { totalValuation: 0, totalProfit: 0, profitPercent: 0, totalPurchase: 0, d2Deposit: 0 }
+    overseasNotice.value = '해외 잔고 연동 중 오류가 발생했습니다'
+  }
+}
+
 // URL 쿼리에서 초기 탭 설정 및 데이터 로드
 onMounted(async () => {
   if (route.query.main) {
@@ -118,11 +194,21 @@ onMounted(async () => {
   }
 
   // Load data
-  await Promise.all([loadHoldings(), loadBalance()])
+  await Promise.all([loadHoldings(), loadBalance(), loadOverseasBalance(), loadExchangeRate()])
 })
 
-const formatNumber = (num) => {
-  return new Intl.NumberFormat('ko-KR').format(Number(num) || 0)
+const formatNumber = (n) => {
+  return new Intl.NumberFormat('ko-KR').format(Number(n) || 0)
+}
+
+// USD 금액 표시 (소수 2자리)
+const formatUsd = (n) => {
+  return new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(n) || 0)
+}
+
+// 통화 단위 금액 포맷 (국내 KRW / 해외 USD)
+const formatMoney = (n) => {
+  return isOverseas.value ? `$${formatUsd(n)}` : `${formatNumber(n)}원`
 }
 
 const goToNews = (stock) => {
@@ -130,6 +216,11 @@ const goToNews = (stock) => {
 }
 
 const goToTrade = (stock) => {
+  if (isOverseas.value) {
+    const exchange = stock.exchange || 'NASD'
+    router.push(`/trading/${stock.symbol}?market=US&exchange=${exchange}`)
+    return
+  }
   router.push(`/trading/${stock.symbol}`)
 }
 
@@ -166,19 +257,25 @@ const goToInfo = (stock) => {
           </div>
         </div>
 
-        <!-- USD Card (추후 지원) -->
-        <div class="cash-card disabled-card">
+        <!-- USD Card (해외 자산 요약 — KIS 모의 잔고 기준) -->
+        <div class="cash-card">
           <div class="cash-header">
-            <h3 class="cash-title">USD (추후 지원)</h3>
+            <h3 class="cash-title">USD</h3>
+            <span class="cash-total">${{ formatUsd(overseasSummary.totalValuation) }}</span>
           </div>
+          <p v-if="overseasNotice" class="cash-notice">{{ overseasNotice }}</p>
           <div class="cash-details">
             <div class="cash-detail-item">
-              <span class="detail-label">주문가능금</span>
-              <span class="detail-value">—</span>
+              <span class="detail-label">평가금액</span>
+              <span class="detail-value">
+                {{ overseasNotice && overseasSummary.totalValuation === 0 ? '—' : '$' + formatUsd(overseasSummary.totalValuation) }}
+              </span>
             </div>
             <div class="cash-detail-item">
-              <span class="detail-label">출금가능금</span>
-              <span class="detail-value">—</span>
+              <span class="detail-label">매입금액</span>
+              <span class="detail-value">
+                {{ overseasNotice && overseasSummary.totalPurchase === 0 ? '—' : '$' + formatUsd(overseasSummary.totalPurchase) }}
+              </span>
             </div>
           </div>
         </div>
@@ -189,34 +286,40 @@ const goToInfo = (stock) => {
         <!-- Summary Card -->
         <div class="summary-card">
           <div class="summary-header">
-            <h3 class="summary-title">{{ tabs.sub === 'domestic' ? '국내' : '해외 (추후 지원)' }} 주식</h3>
+            <h3 class="summary-title">{{ tabs.sub === 'domestic' ? '국내' : '해외 (US)' }} 주식</h3>
             <div class="profit-badge">
               <span class="profit-icon">{{ currentSummary.profitPercent >= 0 ? '▲' : '▼' }}</span>
-              <span class="profit-percent">{{ currentSummary.profitPercent }}%</span>
+              <span class="profit-percent">{{ Number(currentSummary.profitPercent || 0).toFixed(2) }}%</span>
             </div>
           </div>
+
+          <p v-if="isOverseas && overseasNotice" class="summary-notice">{{ overseasNotice }}</p>
 
           <div class="summary-main">
             <div class="main-info">
               <span class="main-label">총평가금액</span>
-              <span class="main-value">{{ formatNumber(currentSummary.totalValuation) }}<span class="unit">원</span></span>
+              <span class="main-value">
+                <template v-if="isOverseas">${{ formatUsd(currentSummary.totalValuation) }}</template>
+                <template v-else>{{ formatNumber(currentSummary.totalValuation) }}<span class="unit">원</span></template>
+              </span>
+              <span v-if="isOverseas && usdRate" class="krw-paren">≈ ₩{{ formatNumber(Math.round(currentSummary.totalValuation * usdRate)) }}</span>
             </div>
             <div class="profit-info">
               <span class="profit-label">총평가손익</span>
-              <span class="profit-value" :class="currentSummary.totalProfit >= 0 ? 'positive' : 'negative'">{{ formatNumber(currentSummary.totalProfit) }}원</span>
+              <span class="profit-value" :class="currentSummary.totalProfit >= 0 ? 'positive' : 'negative'">{{ formatMoney(currentSummary.totalProfit) }}</span>
             </div>
           </div>
 
           <div class="summary-details">
             <div class="detail-row">
               <div class="detail-item">
-                <span class="detail-label">D+2예수금</span>
-                <span class="detail-value">{{ formatNumber(currentSummary.d2Deposit) }}원</span>
+                <span class="detail-label">{{ isOverseas ? '예수금(USD)' : 'D+2예수금' }}</span>
+                <span class="detail-value">{{ isOverseas ? '—' : formatNumber(currentSummary.d2Deposit) + '원' }}</span>
               </div>
               <div class="detail-divider"></div>
               <div class="detail-item">
                 <span class="detail-label">총매입금액</span>
-                <span class="detail-value">{{ formatNumber(currentSummary.totalPurchase) }}원</span>
+                <span class="detail-value">{{ formatMoney(currentSummary.totalPurchase) }}</span>
               </div>
             </div>
           </div>
@@ -226,7 +329,8 @@ const goToInfo = (stock) => {
         <div class="stock-list">
           <!-- Empty State -->
           <div v-if="currentStocks.length === 0" class="empty-state">
-            {{ tabs.sub === 'domestic' ? '보유 중인 국내 주식이 없습니다' : '해외 주식은 추후 지원 예정입니다' }}
+            <template v-if="tabs.sub === 'domestic'">보유 중인 국내 주식이 없습니다</template>
+            <template v-else>{{ overseasNotice || '보유 중인 해외 주식이 없습니다' }}</template>
           </div>
 
           <div v-for="stock in currentStocks" :key="stock.symbol" class="stock-card-enhanced">
@@ -242,10 +346,18 @@ const goToInfo = (stock) => {
                   <span class="stock-symbol">{{ stock.symbol }}</span>
                 </div>
                 <div class="stock-price-row">
-                  <span class="current-price">₩{{ formatNumber(stock.currentPrice) }}</span>
-                  <span class="profit-badge" :class="stock.profitPercent >= 0 ? 'positive' : 'negative'">
-                    {{ stock.profitPercent >= 0 ? '+' : '' }}{{ stock.profitPercent }}%
+                  <span class="current-price">
+                    <template v-if="isOverseas">
+                      {{ stock.currentPrice > 0 ? '$' + formatUsd(stock.currentPrice) : '—' }}
+                    </template>
+                    <template v-else>₩{{ formatNumber(stock.currentPrice) }}</template>
                   </span>
+                  <span class="profit-badge" :class="stock.profitPercent >= 0 ? 'positive' : 'negative'">
+                    {{ stock.profitPercent >= 0 ? '+' : '' }}{{ Number(stock.profitPercent || 0).toFixed(2) }}%
+                  </span>
+                </div>
+                <div v-if="isOverseas && stock.currentPrice > 0 && usdRate" class="stock-krw-paren">
+                  ≈ ₩{{ formatNumber(Math.round(stock.currentPrice * usdRate)) }}
                 </div>
               </div>
             </div>
@@ -253,22 +365,22 @@ const goToInfo = (stock) => {
             <!-- Stock Details -->
             <div class="stock-details">
               <div class="detail-item">
-                <span class="detail-label">평가금액</span>
-                <span class="detail-value">{{ formatNumber(stock.purchasePrice) }}원</span>
+                <span class="detail-label">매입금액</span>
+                <span class="detail-value">{{ formatMoney(stock.purchasePrice) }}</span>
               </div>
               <div class="detail-item">
                 <span class="detail-label">평가손익</span>
                 <span class="detail-value profit" :class="stock.profit >= 0 ? 'positive' : 'negative'">
-                  {{ stock.profit >= 0 ? '+' : '' }}{{ formatNumber(stock.profit) }}원
+                  {{ stock.profit >= 0 ? '+' : '' }}{{ formatMoney(stock.profit) }}
                 </span>
               </div>
               <div class="detail-item">
                 <span class="detail-label">매도 가능 수량</span>
-                <span class="detail-value">{{ formatNumber(stock.quantity) }}주</span>
+                <span class="detail-value">{{ formatNumber(isOverseas ? (stock.orderableQty || stock.quantity) : stock.quantity) }}주</span>
               </div>
               <div class="detail-item">
                 <span class="detail-label">평균단가</span>
-                <span class="detail-value">{{ formatNumber(stock.avgPrice) }}원</span>
+                <span class="detail-value">{{ isOverseas ? '$' + formatUsd(stock.avgPrice) : formatNumber(stock.avgPrice) + '원' }}</span>
               </div>
             </div>
 
@@ -378,6 +490,33 @@ const goToInfo = (stock) => {
   font-weight: var(--font-weight-bold);
   color: var(--color-text-primary);
   line-height: 1.2;
+}
+
+.krw-paren {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  margin-top: var(--spacing-xxs);
+}
+
+.summary-notice {
+  margin: 0 0 var(--spacing-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-md);
+}
+
+.cash-notice {
+  margin: 0 0 var(--spacing-md);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.stock-krw-paren {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  margin-top: 2px;
 }
 
 .unit {

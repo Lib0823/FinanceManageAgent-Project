@@ -140,8 +140,18 @@ export const tradingApi = {
 // Stock API (Spring Boot api-server)
 export const stockApi = {
   search: (q) => api.get('/stocks/search', { params: { q } }),
+  searchOverseas: (q) => api.get('/stocks/search', { params: { q, market: 'US' } }),
   getPrice: (stockCode) => api.get(`/stocks/${stockCode}/price`),
   getOrderbook: (stockCode) => api.get(`/stocks/${stockCode}/orderbook`)
+}
+
+// Overseas (US) Stock API (Spring Boot api-server)
+export const overseasApi = {
+  getPrice: (symbol, exchange) =>
+    api.get(`/overseas/stocks/${symbol}/price`, { params: { exchange } }),
+  getBalance: () => api.get('/overseas/balance'),
+  buy: (order) => api.post('/overseas/buy', order),
+  sell: (order) => api.post('/overseas/sell', order)
 }
 
 // Favorite API (Spring Boot api-server)

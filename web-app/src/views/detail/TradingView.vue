@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '@/components/common/AppHeader.vue'
-import { stockApi, tradingApi } from '@/services/api'
+import { stockApi, tradingApi, overseasApi, marketApi } from '@/services/api'
 
 const route = useRoute()
 const router = useRouter()
@@ -12,6 +12,14 @@ const stockName = ref(route.query.name || '삼성전자')  // Stock name
 const activeTab = ref('buy')
 const loading = ref(false)
 const errorMessage = ref('')
+
+// 해외(US) 모드 판정: ?market=US 또는 ?exchange=NASD/NYSE/AMEX
+const VALID_EXCHANGES = ['NASD', 'NYSE', 'AMEX']
+const rawMarket = String(route.query.market || '').toUpperCase()
+const rawExchange = String(route.query.exchange || '').toUpperCase()
+const isOverseas = ref(rawMarket === 'US' || VALID_EXCHANGES.includes(rawExchange))
+// 거래소 코드 (잔고·매매용 OVRS_EXCG_CD). 기본 NASD.
+const exchange = ref(VALID_EXCHANGES.includes(rawExchange) ? rawExchange : 'NASD')
 
 const orderForm = ref({
   type: 'market',
@@ -28,16 +36,32 @@ const changeRate = ref(null)
 const changeAmount = ref(null)
 const priceNotice = ref(null)
 
-// 호가 (order book)
+// 호가 (order book) — 국내 전용
 const orderbookAsks = ref([]) // 매도호가 (높은 가격), 위쪽
 const orderbookBids = ref([]) // 매수호가, 아래쪽
 const orderbookNotice = ref(null)
 
-// 주문 가능 정보
+// 주문 가능 정보 — 국내 전용
 const orderableNotice = ref(null)
+
+// 환율 (USD → KRW), 해외 모드에서 KRW 병기용
+const usdRate = ref(null)
 
 const formatNumber = (num) => {
   return new Intl.NumberFormat('ko-KR').format(Math.round(Number(num) || 0))
+}
+
+// USD 금액 포맷 (소수점 2자리)
+const formatUsd = (num) => {
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(Number(num) || 0)
+}
+
+// 금액 표기 (국내=원, 해외=USD 소수점)
+const formatMoney = (num) => {
+  return isOverseas.value ? `$${formatUsd(num)}` : `${formatNumber(num)}원`
 }
 
 // 총 금액: 가격 * 수량 (가격·수량 양쪽에 반응)
@@ -45,6 +69,18 @@ const totalAmount = computed(() => {
   const price = Number(orderForm.value.price) || 0
   const quantity = Number(orderForm.value.quantity) || 0
   return price * quantity
+})
+
+// 해외 모드 총액 KRW 환산 (환율 있을 때만)
+const totalAmountKrw = computed(() => {
+  if (!isOverseas.value || usdRate.value == null) return null
+  return totalAmount.value * Number(usdRate.value)
+})
+
+// 현재가 KRW 환산 (해외 모드 병기)
+const currentPriceKrw = computed(() => {
+  if (!isOverseas.value || usdRate.value == null || currentPrice.value == null) return null
+  return Number(currentPrice.value) * Number(usdRate.value)
 })
 
 // 현재 일시 (ko-KR)
@@ -62,7 +98,7 @@ const currentDateTime = computed(() => {
   return `${date} / ${time}`
 })
 
-// 호가창에 표시할 행 (매도 위, 매수 아래)
+// 호가창에 표시할 행 (매도 위, 매수 아래) — 국내 전용
 const orderbookRows = computed(() => {
   const asks = orderbookAsks.value.map((row) => ({ ...row, side: 'ask' }))
   const bids = orderbookBids.value.map((row) => ({ ...row, side: 'bid' }))
@@ -123,6 +159,10 @@ const estimateTick = (price) => {
 }
 
 const loadPrice = async () => {
+  if (isOverseas.value) {
+    await loadOverseasPrice()
+    return
+  }
   try {
     const response = await stockApi.getPrice(symbol.value)
     const data = response?.data || {}
@@ -144,7 +184,54 @@ const loadPrice = async () => {
   }
 }
 
+// 해외 현재가: overseasApi.getPrice(symbol, exchange) → {last, base, diff, rate, currency, notice}
+const loadOverseasPrice = async () => {
+  try {
+    const response = await overseasApi.getPrice(symbol.value, exchange.value)
+    const data = response?.data || {}
+    if (data.notice) {
+      priceNotice.value = data.notice
+    } else {
+      priceNotice.value = null
+    }
+    if (data.last != null) {
+      currentPrice.value = Number(data.last)
+      changeAmount.value = data.diff != null ? Number(data.diff) : null
+      changeRate.value = data.rate != null ? Number(data.rate) : null
+      orderForm.value.price = Number(data.last)
+    } else {
+      // 시세 비활성/권한없음: 가격 없음 표기 ('—')
+      currentPrice.value = null
+      changeAmount.value = null
+      changeRate.value = null
+      if (!priceNotice.value) priceNotice.value = '해외 시세 미연동'
+    }
+  } catch (error) {
+    console.error('Failed to load overseas price:', error)
+    currentPrice.value = null
+    changeAmount.value = null
+    changeRate.value = null
+    priceNotice.value = '해외 시세 미연동'
+  }
+}
+
+// 환율 로드 (해외 모드 KRW 병기용). 실패해도 USD 표기는 유지.
+const loadExchangeRate = async () => {
+  if (!isOverseas.value) return
+  try {
+    const res = await marketApi.getExchangeRates()
+    const list = res && res.success && Array.isArray(res.data) ? res.data : []
+    const usd = list.find((r) => String(r?.currency || '').toUpperCase().includes('USD'))
+    usdRate.value = usd && usd.rate != null ? Number(usd.rate) : null
+  } catch (error) {
+    console.error('Failed to load exchange rate:', error)
+    usdRate.value = null
+  }
+}
+
 const loadOrderbook = async () => {
+  // 해외 호가 미지원 → 호출 자체 생략
+  if (isOverseas.value) return
   try {
     const response = await stockApi.getOrderbook(symbol.value)
     const data = response?.data || {}
@@ -170,6 +257,8 @@ const loadOrderbook = async () => {
 }
 
 const loadOrderable = async () => {
+  // 해외는 주문가능 조회 미지원
+  if (isOverseas.value) return
   try {
     const price = Number(orderForm.value.price) || Number(currentPrice.value) || 0
     const response = await tradingApi.getOrderable(symbol.value, price)
@@ -191,7 +280,7 @@ const loadOrderable = async () => {
   }
 }
 
-// "최대" 선택 시 수량을 주문가능 최대로
+// "최대" 선택 시 수량을 주문가능 최대로 (국내 전용)
 const setMaxQuantity = (event) => {
   if (event.target.checked) {
     orderForm.value.quantity = orderForm.value.maxQuantity
@@ -200,7 +289,11 @@ const setMaxQuantity = (event) => {
 
 const loadMarketData = async () => {
   await loadPrice()
-  await Promise.all([loadOrderbook(), loadOrderable()])
+  if (isOverseas.value) {
+    await loadExchangeRate()
+  } else {
+    await Promise.all([loadOrderbook(), loadOrderable()])
+  }
 }
 
 const placeOrder = async () => {
@@ -209,6 +302,11 @@ const placeOrder = async () => {
   try {
     loading.value = true
     errorMessage.value = ''
+
+    if (isOverseas.value) {
+      await placeOverseasOrder()
+      return
+    }
 
     const orderData = {
       stockCode: symbol.value,
@@ -237,10 +335,54 @@ const placeOrder = async () => {
   }
 }
 
-// 미체결 주문 (실데이터: /trading/pending-orders → daily-ccld 필터)
+// 해외 주문: 지정가 전용. {success:false, notice} 형태로 graceful degrade 가능.
+const placeOverseasOrder = async () => {
+  const qty = parseInt(orderForm.value.quantity)
+  const price = Number(orderForm.value.price)
+
+  if (!qty || qty <= 0) {
+    errorMessage.value = '수량을 입력해 주세요'
+    alert(errorMessage.value)
+    return
+  }
+  if (!price || price <= 0) {
+    // 해외는 지정가 전용 → 단가 필수
+    errorMessage.value = '해외 주문은 지정가 전용입니다. 단가를 입력해 주세요'
+    alert(errorMessage.value)
+    return
+  }
+
+  const order = {
+    symbol: symbol.value,
+    exchange: exchange.value,
+    quantity: qty,
+    price: price
+  }
+
+  const response =
+    activeTab.value === 'buy'
+      ? await overseasApi.buy(order)
+      : await overseasApi.sell(order)
+
+  // 백엔드 graceful degrade: { success:false, notice:"..." }
+  const data = response?.data || {}
+  if (response?.success === false || data.success === false) {
+    const notice = data.notice || response?.message || '해외 주문에 실패했습니다'
+    errorMessage.value = notice
+    alert(notice)
+    return
+  }
+
+  alert(`${activeTab.value === 'buy' ? '매수' : '매도'} 주문이 완료되었습니다.`)
+  router.push('/transactions')
+}
+
+// 미체결 주문 (실데이터: /trading/pending-orders → daily-ccld 필터). 국내 전용.
 const pendingOrders = ref([])
 
 const loadPendingOrders = async () => {
+  // 해외 미체결 조회는 MVP 제외
+  if (isOverseas.value) return
   try {
     const response = await tradingApi.getPendingOrders()
     const list = Array.isArray(response?.data) ? response.data : []
@@ -267,11 +409,12 @@ watch(symbol, () => {
   loadMarketData()
 })
 
-// 가격 변경 시 주문가능 수량/금액 갱신
+// 가격 변경 시 주문가능 수량/금액 갱신 (국내 전용)
 let orderablePriceTimer = null
 watch(
   () => orderForm.value.price,
   () => {
+    if (isOverseas.value) return
     if (orderablePriceTimer) clearTimeout(orderablePriceTimer)
     orderablePriceTimer = setTimeout(() => {
       loadOrderable()
@@ -295,20 +438,40 @@ const filteredOrders = computed(() => ({
       <div class="stock-header">
         <h2 class="stock-name">{{ stockName }}({{ symbol }})</h2>
         <div v-if="currentPrice != null" class="stock-price-row">
-          <span class="stock-current-price">{{ formatNumber(currentPrice) }}원</span>
+          <span class="stock-current-price">
+            <template v-if="isOverseas">${{ formatUsd(currentPrice) }}</template>
+            <template v-else>{{ formatNumber(currentPrice) }}원</template>
+          </span>
           <span
             v-if="changeRate != null"
             :class="['stock-change', changeRate >= 0 ? 'up' : 'down']"
           >
             {{ changeRate >= 0 ? '▲' : '▼' }}
-            <template v-if="changeAmount != null">{{ formatNumber(Math.abs(changeAmount)) }}</template>
+            <template v-if="changeAmount != null">
+              <template v-if="isOverseas">{{ formatUsd(Math.abs(changeAmount)) }}</template>
+              <template v-else>{{ formatNumber(Math.abs(changeAmount)) }}</template>
+            </template>
             ({{ changeRate >= 0 ? '+' : '' }}{{ changeRate.toFixed(2) }}%)
           </span>
         </div>
+        <!-- 해외 모드 KRW 병기 -->
+        <p v-if="isOverseas && currentPriceKrw != null" class="krw-equivalent">
+          ≈ {{ formatNumber(currentPriceKrw) }}원
+        </p>
+        <!-- 해외 모드인데 시세 없음: '—' 표기 -->
+        <div v-if="isOverseas && currentPrice == null" class="stock-price-row">
+          <span class="stock-current-price">—</span>
+        </div>
         <p v-if="priceNotice" class="notice-text">{{ priceNotice }}</p>
         <div class="stock-tags">
-          <span class="tag">국내</span>
-          <span class="tag">KOSPI</span>
+          <template v-if="isOverseas">
+            <span class="tag">해외</span>
+            <span class="tag">{{ exchange }}</span>
+          </template>
+          <template v-else>
+            <span class="tag">국내</span>
+            <span class="tag">KOSPI</span>
+          </template>
         </div>
       </div>
 
@@ -332,15 +495,15 @@ const filteredOrders = computed(() => ({
           </div>
         </div>
 
-        <div v-if="filteredOrders.pending.length === 0" class="no-orders">
+        <div v-if="!isOverseas && filteredOrders.pending.length === 0" class="no-orders">
           <p>현재 미체결 주문이 없습니다.</p>
         </div>
       </div>
 
       <!-- Trading Form -->
       <div class="trading-form">
-        <!-- Price List (Order Book) -->
-        <div class="price-list">
+        <!-- Price List (Order Book) — 국내 전용 -->
+        <div v-if="!isOverseas" class="price-list">
           <div
             v-for="(row, idx) in orderbookRows"
             :key="`${row.side}-${row.price}-${idx}`"
@@ -356,6 +519,11 @@ const filteredOrders = computed(() => ({
           </div>
           <div v-if="orderbookRows.length === 0" class="price-item empty">호가 없음</div>
           <p v-if="orderbookNotice" class="notice-text orderbook-notice">{{ orderbookNotice }}</p>
+        </div>
+
+        <!-- 해외 호가 미지원 안내 -->
+        <div v-else class="price-list overseas-orderbook">
+          <div class="price-item empty">해외 호가<br />미지원</div>
         </div>
 
         <!-- Order Form -->
@@ -390,10 +558,10 @@ const filteredOrders = computed(() => ({
               <span class="form-label">수량</span>
               <div class="form-input-group">
                 <input type="text" v-model="orderForm.quantity" class="form-input" />
-                <span class="form-hint">
+                <span v-if="!isOverseas" class="form-hint">
                   주문 가능 {{ formatNumber(orderForm.maxQuantity) }}주
                 </span>
-                <label class="checkbox-small">
+                <label v-if="!isOverseas" class="checkbox-small">
                   <input type="checkbox" @change="setMaxQuantity" /> 최대
                 </label>
               </div>
@@ -402,13 +570,19 @@ const filteredOrders = computed(() => ({
               <span class="form-label">가격</span>
               <div class="form-input-group">
                 <input type="text" v-model="orderForm.price" class="form-input" />
-                <span class="form-hint">주문 가능 {{ formatNumber(orderForm.maxPrice) }}원</span>
+                <span v-if="isOverseas" class="form-hint">지정가 전용 (USD)</span>
+                <span v-else class="form-hint">주문 가능 {{ formatNumber(orderForm.maxPrice) }}원</span>
               </div>
             </div>
-            <p v-if="orderableNotice" class="notice-text">{{ orderableNotice }}</p>
+            <p v-if="!isOverseas && orderableNotice" class="notice-text">{{ orderableNotice }}</p>
             <div class="form-row total">
               <span class="form-label">총 {{ activeTab === 'buy' ? '매수' : '매도' }} 금액</span>
-              <span class="form-total">{{ formatNumber(totalAmount) }}원</span>
+              <span class="form-total">{{ formatMoney(totalAmount) }}</span>
+            </div>
+            <!-- 해외 총액 KRW 병기 -->
+            <div v-if="isOverseas && totalAmountKrw != null" class="form-row krw-row">
+              <span class="form-label"></span>
+              <span class="krw-equivalent">≈ {{ formatNumber(totalAmountKrw) }}원</span>
             </div>
 
             <!-- Date Time -->
@@ -426,6 +600,7 @@ const filteredOrders = computed(() => ({
           <!-- Submit Button -->
           <button
             :class="['submit-btn', activeTab]"
+            :disabled="loading"
             @click="placeOrder"
           >
             {{ activeTab === 'buy' ? '매수' : '매도' }} 주문
@@ -481,6 +656,12 @@ const filteredOrders = computed(() => ({
 
 .stock-change.down {
   color: var(--color-stock-down);
+}
+
+.krw-equivalent {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin-bottom: var(--spacing-sm);
 }
 
 .notice-text {
@@ -583,6 +764,10 @@ const filteredOrders = computed(() => ({
   gap: 2px;
 }
 
+.overseas-orderbook {
+  justify-content: center;
+}
+
 .price-item {
   display: flex;
   flex-direction: column;
@@ -678,6 +863,10 @@ const filteredOrders = computed(() => ({
   border-top: 1px solid var(--color-border-light);
 }
 
+.form-row.krw-row {
+  margin-top: -2px;
+}
+
 .form-label {
   width: 50px;
   font-size: var(--font-size-xs);
@@ -756,6 +945,11 @@ const filteredOrders = computed(() => ({
   color: var(--color-text-inverse);
   cursor: pointer;
   margin-top: var(--spacing-md);
+}
+
+.submit-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .submit-btn.buy {

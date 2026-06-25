@@ -3,7 +3,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AppHeader from '@/components/common/AppHeader.vue'
 import InvestmentTabs from '@/components/common/InvestmentTabs.vue'
-import { stockApi, favoriteApi } from '@/services/api'
+import { stockApi, overseasApi, marketApi, favoriteApi } from '@/services/api'
 
 const router = useRouter()
 
@@ -17,22 +17,56 @@ const searchError = ref('')
 const priceMap = ref({})
 // 관심종목 코드 집합
 const favoriteCodes = ref(new Set())
+// USD → KRW 환율 (해외 KRW 병기용, 없으면 null → 병기 생략)
+const usdKrwRate = ref(null)
 
 const isDomestic = computed(() => tabs.value.sub === 'domestic')
 
 const filteredResults = computed(() => {
-  // 백엔드 검색이 종목코드/이름으로 이미 필터링하므로 그대로 사용 (국내만 제공)
-  if (!isDomestic.value) {
-    return []
-  }
+  // 백엔드 검색이 종목코드/이름으로 이미 필터링하므로 그대로 사용 (국내·해외 공통)
   return results.value
 })
+
+// ApiResponse 엔벨로프({success,message,data})와 bare payload 모두 허용하는 안전 언랩
+const unwrap = (res) => {
+  if (res && typeof res === 'object' && !Array.isArray(res) && 'data' in res && 'success' in res) {
+    return res.data
+  }
+  return res
+}
 
 const formatNumber = (num) => {
   if (num === null || num === undefined || Number.isNaN(Number(num))) {
     return '—'
   }
   return new Intl.NumberFormat('ko-KR').format(num)
+}
+
+// 해외 종목의 거래소 코드 추출 (NASD/NYSE/AMEX). 백엔드 검색 응답 필드명 변형을 모두 허용.
+const getExchange = (item) =>
+  item?.exchangeCode ?? item?.exchange_code ?? item?.exchange ?? null
+
+// USD 통화 표기 (소수 2자리). KRW 환율이 있으면 병기.
+const formatUsd = (num) => {
+  if (num === null || num === undefined || Number.isNaN(Number(num))) {
+    return '—'
+  }
+  return `$${new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(Number(num))}`
+}
+
+const toKrw = (usd) => {
+  if (
+    usd === null ||
+    usd === undefined ||
+    Number.isNaN(Number(usd)) ||
+    usdKrwRate.value === null
+  ) {
+    return null
+  }
+  return Number(usd) * usdKrwRate.value
 }
 
 const handleSearch = async () => {
@@ -44,14 +78,12 @@ const handleSearch = async () => {
     return
   }
 
-  if (!isDomestic.value) {
-    results.value = []
-    return
-  }
-
   searching.value = true
   try {
-    const data = await stockApi.search(query)
+    const res = isDomestic.value
+      ? await stockApi.search(query)
+      : await stockApi.searchOverseas(query)
+    const data = unwrap(res)
     results.value = Array.isArray(data) ? data : []
   } catch (error) {
     console.error('종목 검색 실패:', error)
@@ -62,48 +94,128 @@ const handleSearch = async () => {
   }
 }
 
-// 항목별 현재가 lazy 로딩
-const loadPrice = async (stockCode) => {
+// 항목별 현재가 lazy 로딩 (국내·해외 분기)
+const loadPrice = async (item) => {
+  const stockCode = item?.stockCode
   if (!stockCode || priceMap.value[stockCode]) {
     return
   }
   // 중복 호출 방지를 위해 placeholder 선점
   priceMap.value = { ...priceMap.value, [stockCode]: { loading: true } }
+
   try {
-    const data = await stockApi.getPrice(stockCode)
-    priceMap.value = {
-      ...priceMap.value,
-      [stockCode]: {
-        loading: false,
-        currentPrice: data?.currentPrice ?? null,
-        changeAmount: data?.changeAmount ?? null,
-        changeRate: data?.changeRate ?? null,
-        notice: data?.notice ?? null
+    if (isDomestic.value) {
+      const data = unwrap(await stockApi.getPrice(stockCode))
+      priceMap.value = {
+        ...priceMap.value,
+        [stockCode]: {
+          loading: false,
+          overseas: false,
+          currentPrice: data?.currentPrice ?? null,
+          changeAmount: data?.changeAmount ?? null,
+          changeRate: data?.changeRate ?? null,
+          notice: data?.notice ?? null
+        }
+      }
+    } else {
+      const exchange = getExchange(item)
+      const data = unwrap(await overseasApi.getPrice(stockCode, exchange))
+      // OverseasPriceResponse: { symbol, exchange, currency, last, base, diff, rate, notice }
+      const last = data?.last ?? data?.currentPrice ?? null
+      const rate = data?.rate ?? data?.changeRate ?? null
+      priceMap.value = {
+        ...priceMap.value,
+        [stockCode]: {
+          loading: false,
+          overseas: true,
+          currency: data?.currency ?? 'USD',
+          currentPrice: last,
+          changeAmount: data?.diff ?? data?.changeAmount ?? null,
+          changeRate: rate,
+          notice: data?.notice ?? null
+        }
       }
     }
   } catch (error) {
     console.error(`현재가 조회 실패 (${stockCode}):`, error)
     priceMap.value = {
       ...priceMap.value,
-      [stockCode]: { loading: false, currentPrice: null, changeAmount: null, changeRate: null, notice: '—' }
+      [stockCode]: {
+        loading: false,
+        overseas: !isDomestic.value,
+        currentPrice: null,
+        changeAmount: null,
+        changeRate: null,
+        notice: '—'
+      }
     }
   }
 }
 
 const getPriceInfo = (stockCode) => priceMap.value[stockCode] || null
 
+const hasPrice = (stockCode) => {
+  const info = getPriceInfo(stockCode)
+  return !!info && !info.loading && info.currentPrice !== null && info.currentPrice !== undefined
+}
+
+const priceText = (stockCode) => {
+  const info = getPriceInfo(stockCode)
+  if (!info) {
+    return '—'
+  }
+  if (info.overseas) {
+    return formatUsd(info.currentPrice)
+  }
+  return `${formatNumber(info.currentPrice)}원`
+}
+
+const krwText = (stockCode) => {
+  const info = getPriceInfo(stockCode)
+  if (!info || !info.overseas) {
+    return null
+  }
+  const krw = toKrw(info.currentPrice)
+  if (krw === null) {
+    return null
+  }
+  return `≈ ${formatNumber(Math.round(krw))}원`
+}
+
 // 검색 결과가 바뀌면 각 항목 현재가 조회
 watch(
   filteredResults,
   (items) => {
-    items.forEach((item) => loadPrice(item.stockCode))
+    items.forEach((item) => loadPrice(item))
   },
   { immediate: false }
 )
 
+// 탭(국내↔해외) 전환 시 입력/결과/가격 캐시 초기화 — 통화·도메인이 다르므로 섞이지 않게
+watch(isDomestic, () => {
+  searchQuery.value = ''
+  results.value = []
+  priceMap.value = {}
+  searchError.value = ''
+})
+
+const loadExchangeRates = async () => {
+  try {
+    const res = await marketApi.getExchangeRates()
+    const list = res && res.success && Array.isArray(res.data) ? res.data : []
+    const usd = list.find((r) => r && r.currency === 'USD')
+    usdKrwRate.value = usd && Number(usd.rate) ? Number(usd.rate) : null
+  } catch (error) {
+    // 환율 실패 시 KRW 병기만 생략 (해외 검색은 정상 동작)
+    console.error('환율 조회 실패:', error)
+    usdKrwRate.value = null
+  }
+}
+
 const loadFavorites = async () => {
   try {
-    const data = await favoriteApi.list()
+    const res = await favoriteApi.list()
+    const data = unwrap(res)
     const codes = Array.isArray(data) ? data.map((f) => f.stockCode) : []
     favoriteCodes.value = new Set(codes)
   } catch (error) {
@@ -141,6 +253,7 @@ const goToCompany = (item) => {
 
 onMounted(() => {
   loadFavorites()
+  loadExchangeRates()
 })
 </script>
 
@@ -158,11 +271,10 @@ onMounted(() => {
           v-model="searchQuery"
           type="text"
           class="search-input"
-          placeholder="종목명(종목코드)"
-          :disabled="!isDomestic"
+          :placeholder="isDomestic ? '종목명(종목코드)' : '심볼(예: AAPL)·종목명'"
           @keyup.enter="handleSearch"
         />
-        <button class="search-btn" :disabled="!isDomestic || searching" @click="handleSearch">
+        <button class="search-btn" :disabled="searching" @click="handleSearch">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
             <circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/>
             <path d="M21 21L16.5 16.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -172,12 +284,7 @@ onMounted(() => {
 
       <!-- Results List -->
       <div class="results-container">
-        <!-- 해외 주식: 추후 지원 -->
-        <div v-if="!isDomestic" class="empty-state">
-          <p class="empty-text">해외 주식 검색 (추후 지원)</p>
-        </div>
-
-        <div v-else-if="filteredResults.length === 0" class="empty-state">
+        <div v-if="filteredResults.length === 0" class="empty-state">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none">
             <circle cx="11" cy="11" r="7" stroke="var(--color-text-tertiary)" stroke-width="2"/>
             <path d="M21 21L16.5 16.5" stroke="var(--color-text-tertiary)" stroke-width="2" stroke-linecap="round"/>
@@ -207,12 +314,17 @@ onMounted(() => {
               </div>
               <div class="item-info">
                 <span class="item-name">{{ item.stockName }}</span>
-                <span class="item-symbol">{{ item.stockCode }}</span>
+                <span class="item-symbol">
+                  {{ item.stockCode }}<template v-if="!isDomestic && getExchange(item)"> · {{ getExchange(item) }}</template>
+                </span>
               </div>
             </div>
             <div class="item-right">
-              <template v-if="getPriceInfo(item.stockCode) && !getPriceInfo(item.stockCode).loading && getPriceInfo(item.stockCode).currentPrice !== null">
-                <div class="item-price">{{ formatNumber(getPriceInfo(item.stockCode).currentPrice) }}원</div>
+              <template v-if="hasPrice(item.stockCode)">
+                <div class="item-price">{{ priceText(item.stockCode) }}</div>
+                <div v-if="!isDomestic && krwText(item.stockCode)" class="item-krw">
+                  {{ krwText(item.stockCode) }}
+                </div>
                 <div
                   v-if="getPriceInfo(item.stockCode).changeRate !== null && getPriceInfo(item.stockCode).changeRate !== undefined"
                   :class="['item-change', Number(getPriceInfo(item.stockCode).changeRate) >= 0 ? 'positive' : 'negative']"
@@ -412,6 +524,11 @@ onMounted(() => {
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
   color: var(--color-text-primary);
+}
+
+.item-krw {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
 }
 
 .item-change {
