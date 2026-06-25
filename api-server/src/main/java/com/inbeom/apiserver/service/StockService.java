@@ -7,6 +7,8 @@ import com.inbeom.apiserver.dto.stock.StockSearchResponse;
 import com.inbeom.apiserver.repository.StockMasterRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,18 +33,43 @@ public class StockService {
     private final StockMasterRepository stockMasterRepository;
     private final KisQuoteClient kisQuoteClient;
 
+    /** 검색 상위 건수 제한 (코드 prefix / 종목명 부분일치). */
+    private static final Pageable TOP_30 = PageRequest.of(0, 30);
+
+    /** 통화 코드 상수. */
+    private static final String CURRENCY_KRW = "KRW";
+    private static final String CURRENCY_USD = "USD";
+
+    /** 해외(US) 마켓 식별자. */
+    private static final String MARKET_US = "US";
+
     /**
      * 종목 검색: 코드 prefix 또는 종목명 부분일치(대소문자 무시), 최대 30건.
-     * 빈/공백 질의는 빈 리스트.
+     * 빈/공백 질의는 빈 리스트. 마켓 필터 없이 호출하면 국내(KRW) 결과를 반환한다.
      */
     @Transactional(readOnly = true)
     public List<StockSearchResponse> searchStocks(String q) {
+        return searchStocks(q, null);
+    }
+
+    /**
+     * 종목 검색(마켓 분기): 코드 prefix 또는 종목명 부분일치(대소문자 무시), 최대 30건.
+     * 빈/공백 질의는 빈 리스트.
+     *
+     * <p>{@code market} 이 "US"(대소문자 무시)면 통화 USD(해외) 종목을, 그 외(null/빈값/국내)는
+     * 통화 KRW(국내) 종목을 검색한다. 파라미터 없는 기존 호출은 국내 결과를 유지한다.
+     */
+    @Transactional(readOnly = true)
+    public List<StockSearchResponse> searchStocks(String q, String market) {
         if (q == null || q.isBlank()) {
             return Collections.emptyList();
         }
         String term = q.trim();
+        String currency = MARKET_US.equalsIgnoreCase(market != null ? market.trim() : null)
+                ? CURRENCY_USD
+                : CURRENCY_KRW;
         List<StockMaster> matches =
-                stockMasterRepository.findTop30ByStockCodeStartingWithOrStockNameContainingIgnoreCase(term, term);
+                stockMasterRepository.searchByKeywordAndCurrency(term, currency, TOP_30);
         return matches.stream()
                 .map(m -> StockSearchResponse.builder()
                         .stockCode(m.getStockCode())

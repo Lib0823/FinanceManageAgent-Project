@@ -35,6 +35,19 @@ public class StockMaster {
     @Column(name = "market", nullable = false, length = 20)
     private String market = "KOSPI";
 
+    /**
+     * 해외 거래소 코드 (NASD/NYSE/AMEX). 국내 종목은 NULL.
+     */
+    @Column(name = "exchange_code", length = 10)
+    private String exchangeCode;
+
+    /**
+     * 통화 (KRW/USD). 국내 종목은 KRW.
+     */
+    @Builder.Default
+    @Column(name = "currency", nullable = false, length = 3)
+    private String currency = "KRW";
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;

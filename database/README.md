@@ -36,7 +36,7 @@ database/
 
 > `schema.sql`을 직접 실행하거나 손으로 수정하지 마세요. 항상 changelog가 소스입니다.
 
-> ⚠️ **v1.8(`stock_master`/`user_favorites`) 추가 후 `schema.sql` 스냅샷은 아직 재생성되지 않았습니다.** 라이브 DB에 Liquibase가 v1.8을 적용한 뒤 `./database/generate-schema.sh`(내부적으로 `pg_dump -s`)를 실행해 재생성해야 합니다. DB 없이 DDL을 임의로 손으로 작성하지 마세요(스냅샷 위조 금지).
+> ⚠️ **v1.8(`stock_master`/`user_favorites`)·v1.9(해외주식 US `exchange_code`/`currency` 컬럼 + 25개 US 시드) 추가 후 `schema.sql` 스냅샷은 아직 재생성되지 않았습니다.** 라이브 DB에 Liquibase가 v1.8·v1.9를 적용한 뒤 `./database/generate-schema.sh`(내부적으로 `pg_dump -s`)를 실행해 재생성해야 합니다. DB 없이 DDL을 임의로 손으로 작성하지 마세요(스냅샷 위조 금지).
 
 상위 시스템 데이터 흐름은 [`../_docs/ARCHITECTURE.md`](../_docs/ARCHITECTURE.md) 참고.
 
@@ -85,10 +85,10 @@ database/
 
 | 테이블명 | 설명 | 관리 주체 |
 |---------|------|-----------|
-| `stock_master` | 종목 검색 카탈로그 (code/name/market). KOSPI 종목 seed | Spring Boot (Liquibase seed) |
+| `stock_master` | 종목 검색 카탈로그 (code/name/market/**exchange_code/currency**). KOSPI + US 종목 seed | Spring Boot (Liquibase seed) |
 | `user_favorites` | 사용자별 관심종목 (user_id, stock_code, stock_name 비정규화) | Spring Boot |
 
-> `stock_master`는 `ai-agent/config/constants.py`의 `STOCK_NAMES`(+`005930` 삼성전자, `055550` 신한지주)를 seed한 검색 카탈로그(전부 `market='KOSPI'`)다. `user_favorites`는 `(user_id, stock_code)` unique, `user_id` FK→`users(id)` cascade.
+> `stock_master`는 `ai-agent/config/constants.py`의 `STOCK_NAMES`(+`005930` 삼성전자, `055550` 신한지주)를 seed한 검색 카탈로그(`market='KOSPI'`)에 더해, **v1.9에서 해외주식(US) 지원 컬럼·시드를 추가**했다: `exchange_code`(VARCHAR(10), 해외 거래소 NASD/NYSE/AMEX, 국내=NULL), `currency`(VARCHAR(3), 기본 `KRW`). v1.9 시드로 NASDAQ 15 + NYSE 10 = **25개 미국 종목**(`currency='USD'`)을 적재한다. `market=US` 검색은 이 USD 행을 대상으로 한다. `user_favorites`는 `(user_id, stock_code)` unique, `user_id` FK→`users(id)` cascade.
 
 ### 6. 뷰 (4개)
 
@@ -171,7 +171,8 @@ api-server/src/main/resources/db/changelog/
 │   ├── v1.5-user-settings.yaml       # 사용자 UI 설정
 │   ├── v1.6-stage4-5-enhancements.yaml  # 안전망 필터 + 매매 실행 계획
 │   ├── v1.7-web-display-tables.yaml  # 시장 요약 / 실시간 가격 / 보유 종목
-│   └── v1.8-stock-master-favorites.yaml  # 종목 검색 카탈로그 + 관심종목
+│   ├── v1.8-stock-master-favorites.yaml  # 종목 검색 카탈로그 + 관심종목
+│   └── v1.9-overseas-stock-master.yaml   # 해외주식(US) 컬럼(exchange_code/currency) + US 시드
 └── product/                          # 프로덕션 context (향후)
 ```
 

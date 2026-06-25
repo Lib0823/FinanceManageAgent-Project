@@ -50,6 +50,11 @@ databaseChangeLog:
       file: classpath:db/changelog/mvp/v1.8-stock-master-favorites.yaml
       context: mvp
 
+  # Phase 10: Overseas (US) Stock Master Support
+  - include:
+      file: classpath:db/changelog/mvp/v1.9-overseas-stock-master.yaml
+      context: mvp
+
   # ========================================
   # Product Context Changelogs (Future)
   # ========================================

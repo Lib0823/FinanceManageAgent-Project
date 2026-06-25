@@ -28,14 +28,18 @@ public class StockController {
 
     /**
      * 종목 검색 (코드 prefix / 종목명 부분일치, 최대 30건)
-     * GET /api/stocks/search?q=
+     * GET /api/stocks/search?q=&market=
+     *
+     * <p>{@code market=US} 면 해외(USD) 종목을, 그 외(미지정 포함)는 국내(KRW) 종목을 검색한다.
+     * 기존 파라미터 없는 호출은 국내 결과를 유지한다.
      */
     @GetMapping("/search")
     public ResponseEntity<ApiResponse<List<StockSearchResponse>>> search(
-            @RequestParam("q") String q
+            @RequestParam("q") String q,
+            @RequestParam(value = "market", required = false) String market
     ) {
-        log.info("GET /api/stocks/search?q={}", q);
-        List<StockSearchResponse> response = stockService.searchStocks(q);
+        log.info("GET /api/stocks/search?q={}&market={}", q, market);
+        List<StockSearchResponse> response = stockService.searchStocks(q, market);
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 

@@ -12,7 +12,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict GiVCyOciIMcYY1xDyKq1bvB8cUdwqOIQUnYCVWQMVfGNZtkkUH5az1TBtuHb5go
+\restrict DWhooMNTdnilSOtbnZ4CHm5qwh2DKce8ALBCTye9RksQ5xZAAKaxqKn5LECpBC8
 
 -- Dumped from database version 16.13 (Debian 16.13-1.pgdg13+1)
 -- Dumped by pg_dump version 16.13 (Debian 16.13-1.pgdg13+1)
@@ -531,7 +531,9 @@ CREATE TABLE public.stock_master (
     stock_code character varying(10) NOT NULL,
     stock_name character varying(50) NOT NULL,
     market character varying(20) DEFAULT 'KOSPI'::character varying NOT NULL,
-    created_at timestamp without time zone DEFAULT now() NOT NULL
+    created_at timestamp without time zone DEFAULT now() NOT NULL,
+    exchange_code character varying(10),
+    currency character varying(3) DEFAULT 'KRW'::character varying NOT NULL
 );
 
 
@@ -561,6 +563,20 @@ COMMENT ON COLUMN public.stock_master.stock_name IS '종목명';
 --
 
 COMMENT ON COLUMN public.stock_master.market IS '시장 구분 (KOSPI/KOSDAQ 등)';
+
+
+--
+-- Name: COLUMN stock_master.exchange_code; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.stock_master.exchange_code IS '해외 거래소 코드 (NASD/NYSE/AMEX, 국내=NULL)';
+
+
+--
+-- Name: COLUMN stock_master.currency; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.stock_master.currency IS '통화 (KRW/USD)';
 
 
 --
@@ -1943,5 +1959,5 @@ ALTER TABLE ONLY public.user_trade_config
 -- PostgreSQL database dump complete
 --
 
-\unrestrict GiVCyOciIMcYY1xDyKq1bvB8cUdwqOIQUnYCVWQMVfGNZtkkUH5az1TBtuHb5go
+\unrestrict DWhooMNTdnilSOtbnZ4CHm5qwh2DKce8ALBCTye9RksQ5xZAAKaxqKn5LECpBC8
 
