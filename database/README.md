@@ -5,7 +5,7 @@ AI 주식 자동매매 시스템 데이터베이스 스키마 문서
 ## 개요
 
 - **DBMS**: PostgreSQL 16
-- **총 테이블 수**: 19개 (+ 뷰 4개)
+- **총 테이블 수**: 20개 (+ 뷰 4개)
 - **스키마**: 단일 public 스키마 (MVP 단순화)
 - **스키마 소스(편집 대상)**: **Liquibase** changelog (`api-server/src/main/resources/db/changelog/`)
 
@@ -36,7 +36,7 @@ database/
 
 > `schema.sql`을 직접 실행하거나 손으로 수정하지 마세요. 항상 changelog가 소스입니다.
 
-> ⚠️ **v1.8(`stock_master`/`user_favorites`)·v1.9(해외주식 US `exchange_code`/`currency` 컬럼 + 25개 US 시드) 추가 후 `schema.sql` 스냅샷은 아직 재생성되지 않았습니다.** 라이브 DB에 Liquibase가 v1.8·v1.9를 적용한 뒤 `./database/generate-schema.sh`(내부적으로 `pg_dump -s`)를 실행해 재생성해야 합니다. DB 없이 DDL을 임의로 손으로 작성하지 마세요(스냅샷 위조 금지).
+> ⚠️ **v1.8(`stock_master`/`user_favorites`)·v1.9(해외주식 US `exchange_code`/`currency` 컬럼 + 25개 US 시드)·v1.10(`stock_news` 테이블 + GIN 태그 인덱스) 추가 후 `schema.sql` 스냅샷은 아직 재생성되지 않았습니다.** 라이브 DB에 Liquibase가 v1.8~v1.10을 적용한 뒤 `./database/generate-schema.sh`(내부적으로 `pg_dump -s`)를 실행해 재생성해야 합니다. DB 없이 DDL을 임의로 손으로 작성하지 마세요(스냅샷 위조 금지).
 
 상위 시스템 데이터 흐름은 [`../_docs/ARCHITECTURE.md`](../_docs/ARCHITECTURE.md) 참고.
 
@@ -54,16 +54,19 @@ database/
 | `user_trade_config` | 자동매매 설정 (1:1) | user_id, order_amount, max_holdings, order_type, **is_active** |
 | `user_settings` | UI 설정 (1:1) | user_id, asset_order(JSONB), dark_mode, auto_login, notifications(JSONB) |
 
-### 2. 분석 데이터 (6개)
+### 2. 분석 데이터 (7개)
 
 | 테이블명 | 설명 | 갱신 주기 | 쓰는 쪽 |
 |---------|------|-----------|---------|
 | `stock_filter_score` | 코스피 100 스코어링 (→ 30 선정) | 매일 (평일 08:50) | ai-agent |
 | `stock_financial` | DART 재무지표 (PER, ROE, 영업이익률) | 분기별 | ai-agent |
-| `news_analysis` | KR-FinBERT 감성 분석 | 매일 | ai-agent |
+| `news_analysis` | KR-FinBERT 감성 분석 (집계) | 매일 | ai-agent |
 | `prophet_forecast` | Prophet D+1~D+5 시계열 예측 | 매일 | ai-agent |
 | `ai_trade_decision` | Gemini AI 매수/매도 판단 (TOP3) | 매일 | ai-agent |
 | `safety_filter_result` | Gemini 판단 사후 검증 (안전망 필터) | 매일 | ai-agent |
+| `stock_news` | 종목별 뉴스 기사 원문 저장 (제목/요약/URL/감성/태그 JSONB) | 매일 | ai-agent |
+
+> `stock_news`는 종목별 뉴스 기사 단건을 저장한다(`news_analysis`는 종목 단위 감성 집계). ai-agent가 `(stock_code, analysis_date)` 기준으로 DELETE 후 INSERT 하므로 unique 제약은 없다. `tags`(JSONB, 문자열 배열)에는 GIN 인덱스(`idx_stock_news_tags`, `jsonb_path_ops`)가 있어 향후 태그 검색에 사용한다. Spring Boot의 `StockNewsController`(`/api/news`)가 읽기 전용으로 중계한다.
 
 ### 3. 웹 표시용 (3개)
 
@@ -172,7 +175,8 @@ api-server/src/main/resources/db/changelog/
 │   ├── v1.6-stage4-5-enhancements.yaml  # 안전망 필터 + 매매 실행 계획
 │   ├── v1.7-web-display-tables.yaml  # 시장 요약 / 실시간 가격 / 보유 종목
 │   ├── v1.8-stock-master-favorites.yaml  # 종목 검색 카탈로그 + 관심종목
-│   └── v1.9-overseas-stock-master.yaml   # 해외주식(US) 컬럼(exchange_code/currency) + US 시드
+│   ├── v1.9-overseas-stock-master.yaml   # 해외주식(US) 컬럼(exchange_code/currency) + US 시드
+│   └── v1.10-stock-news.yaml             # 종목별 뉴스 기사 저장 (stock_news + GIN 태그 인덱스)
 └── product/                          # 프로덕션 context (향후)
 ```
 

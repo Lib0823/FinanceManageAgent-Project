@@ -55,6 +55,11 @@ databaseChangeLog:
       file: classpath:db/changelog/mvp/v1.9-overseas-stock-master.yaml
       context: mvp
 
+  # Phase 11: Stock News Storage
+  - include:
+      file: classpath:db/changelog/mvp/v1.10-stock-news.yaml
+      context: mvp
+
   # ========================================
   # Product Context Changelogs (Future)
   # ========================================
