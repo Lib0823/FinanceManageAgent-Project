@@ -92,6 +92,17 @@ kis:
   quote-app-key: ${KIS_QUOTE_APP_KEY:}
   quote-app-secret: ${KIS_QUOTE_APP_SECRET:}
 
+  # 실시간 시세 WebSocket 브리지 (Phase 1: 호가 + 체결가).
+  # - enabled=false(기본): 상향 연결/엔드포인트 미등록 → 브라우저는 REST 스냅샷 유지(graceful degrade).
+  # - ws-url: 실전 ws://ops.koreainvestment.com:21000, 모의 ws://ops.koreainvestment.com:31000.
+  # - max-symbols: 상향 연결당 구독 상한(MUST-VERIFY ~41). refcount 로 심볼당 1회 등록.
+  # - frame-debug: true 면 TR별 첫 데이터 프레임의 index→value 를 1회 로깅(필드 인덱스 MUST-VERIFY 확정용).
+  realtime:
+    enabled: ${KIS_REALTIME_ENABLED:false}
+    ws-url: ${KIS_REALTIME_WS_URL:ws://ops.koreainvestment.com:21000}
+    max-symbols: ${KIS_REALTIME_MAX_SYMBOLS:40}
+    frame-debug: ${KIS_REALTIME_FRAME_DEBUG:false}
+
 # DART (금융감독원 전자공시) Open API Configuration
 dart:
   # 발급키: https://opendart.fss.or.kr (없으면 DART 연동 비활성, DART 필드는 null)

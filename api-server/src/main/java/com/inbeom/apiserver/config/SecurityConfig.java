@@ -33,7 +33,9 @@ public class SecurityConfig {
                 session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
             )
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/health", "/health/**", "/auth/**", "/actuator/**", "/test/**", "/market/**", "/company/**", "/stocks/**", "/overseas/stocks/**").permitAll()
+                // /ws/** : 실시간 WebSocket 핸드셰이크. 인증은 JwtHandshakeInterceptor(?token=)가 수행.
+                // JwtAuthenticationFilter 는 Authorization 헤더만 보므로 WS upgrade 요청엔 무해.
+                .requestMatchers("/health", "/health/**", "/auth/**", "/actuator/**", "/test/**", "/market/**", "/company/**", "/stocks/**", "/overseas/stocks/**", "/ws/**").permitAll()
                 .anyRequest().authenticated()
             )
             .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

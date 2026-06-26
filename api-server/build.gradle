@@ -31,6 +31,8 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-security'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
+    // 실시간 시세 브리지 (KIS WebSocket ⇄ 브라우저). kis.realtime.enabled=true 일 때만 활성.
+    implementation 'org.springframework.boot:spring-boot-starter-websocket'
 
     // JWT Authentication
     implementation 'io.jsonwebtoken:jjwt-api:0.12.3'
