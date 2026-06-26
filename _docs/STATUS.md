@@ -92,13 +92,16 @@
 | 매수 (`POST /trading/buy`, KIS `VTTC0802U`) | ✅ | `TradingView` | ✅ |
 | 매도 (`POST /trading/sell`, KIS `VTTC0801U`) | ✅ | `TradingView` | ✅ |
 | 미체결 조회 (`GET /trading/pending-orders`, daily-ccld 필터) | ✅ | `TradingView`/`TransactionsView` | ✅ |
-| 실시간 호가 (`GET /stocks/{code}/orderbook`, KIS `FHKST01010200`) | ✅ | `TradingView` | ✅ |
+| 실시간 호가 (REST) (`GET /stocks/{code}/orderbook`, KIS `FHKST01010200`) | ✅ | `TradingView` | ✅ |
+| 실시간 시세 WebSocket (호가/체결가, Phase 1) (`/ws/realtime?token={JWT}`) | ✅ | `TradingView` | ✅ |
 | 매수가능 조회 (`GET /trading/orderable`, KIS `VTTC8908R`) | ✅ | `TradingView` | ✅ |
 | 종목 검색·시세 (`/stocks/search`, `/stocks/{code}/price`) | ✅ | `SearchView` | ✅ |
 | 관심종목 (`/favorites` GET/POST/DELETE) | ✅ | `FavoritesView` | ✅ |
 | 해외주식(US) 매매·표시·검색 (`/overseas/*`, `/stocks/search?market=US`) | ✅ | `TradingView`(US 지정가)·`AssetDetailView`(해외탭)·`SearchView`(해외) | ✅ |
 
 > 해외주식(US)은 모의 **지정가 전용**이며 잔고(`VTTS3012R`)·매수(`VTTT1002U`)·매도(`VTTT1006U`)·현재가(`HHDFS76200200`)를 사용. **해외 호가·실시간 시세·미국 외 타국가는 미지원**(현재가는 real quote 도메인). 코인은 비활성 유지.
+
+> **실시간 시세 WebSocket (Phase 1)**: api-server가 KIS WebSocket 브리지 `/ws/realtime`를 제공(Browser ⇄ Spring ⇄ KIS upstream). 국내 `H0STASP0`(호가)/`H0STCNT0`(체결가), 미국 `HDFSASP0`/`HDFSCNT0`. **체결통보(`H0STCNI0`/`H0GSCNI0`)는 Phase 2 보류.** **HARD LIMIT — 라이브 데이터는 실계좌 키 + 장중이 필요하며, 모의(mock) 키·장외 시간에는 스트림이 흐르지 않습니다.** 상세: [`api-server/_docs/KIS_API_GUIDE.md`](../api-server/_docs/KIS_API_GUIDE.md) §5
 
 > 거래내역은 데이터 정합성을 위해 **DB에 저장하지 않고 KIS API를 직접 조회**합니다. (TR_ID는 `VTTC0081R`이 올바른 값 — 구버전 `VTTC8001R`은 버그였고 수정됨. [`api-server/_docs/KIS_API_GUIDE.md`](../api-server/_docs/KIS_API_GUIDE.md))
 

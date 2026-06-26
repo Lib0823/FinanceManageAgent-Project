@@ -77,7 +77,8 @@
 - **코인** — 비활성 유지(실데이터 없이 빈 데이터/라벨)
 - **해외지수 위젯(HomeView)** — 개별 종목과 별개로 여전히 mockData 폴백
 - **배당 수령·현금 입출금 내역** — KIS OpenAPI에 개인 ledger 전용 TR **없음**(공식 확인). 배당은 종목 기준 '배당일정'(HHKDB669102C0)만 존재 → 별도 '배당 캘린더' 기능으로만 가능, 거래내역 기타 금액으로는 불가
-- **실시간 시세/체결통보 소켓** — KIS WebSocket 미구현(현재 REST 폴링). 실시간 호가·체결 푸시 없음
+- **실시간 시세 소켓 (호가/체결가)** — KIS WebSocket 브리지(`/ws/realtime`) **구현(Phase 1)**. 국내 `H0STASP0`(호가)/`H0STCNT0`(체결가), 미국 `HDFSASP0`/`HDFSCNT0`. **체결통보(`H0STCNI0`/`H0GSCNI0`)는 Phase 2 보류.**
+  - **HARD LIMIT**: 실시간 라이브 데이터는 **실계좌 키 + 장중(정규장 시간)**이 모두 필요. **모의(mock) 키나 장외 시간에는 스트림이 흐르지 않음**(연결은 되나 데이터 푸시 없음).
 
-> 해결됨: 종목 검색(`/stocks/search`, `/stocks/{code}/price`), 즐겨찾기(`/favorites`), 미체결주문(`/trading/pending-orders`), **실시간 호가**(`/stocks/{code}/orderbook` — KIS FHKST01010200), **매수가능 조회**(`/trading/orderable` — KIS VTTC8908R)가 api-server에 추가됨.
+> 해결됨: 종목 검색(`/stocks/search`, `/stocks/{code}/price`), 즐겨찾기(`/favorites`), 미체결주문(`/trading/pending-orders`), **실시간 호가**(`/stocks/{code}/orderbook` — KIS FHKST01010200), **매수가능 조회**(`/trading/orderable` — KIS VTTC8908R), **실시간 시세 WebSocket 브리지**(`/ws/realtime?token={JWT}` — Phase 1 호가/체결가)가 api-server에 추가됨.
 > 제거됨: 송금/이체(TransferView) — 화면·라우트·진입버튼 전부 삭제.

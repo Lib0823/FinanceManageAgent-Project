@@ -63,6 +63,19 @@ graph TD
 
 > **분석 결과는 ai-agent가 DB에 쓰고, web-app은 Spring Boot를 통해 그 결과를 조회**하는 구조입니다. (web-app이 ai-agent를 직접 호출하지 않음 — `MarketAnalysisController`, `MarketDataController`, `CompanyController`가 DB/외부 API를 중계.)
 
+### 실시간 시세 WebSocket 브리지 (Phase 1)
+
+REST 폴링과 별개로, 실시간 호가·체결가는 KIS WebSocket을 통해 푸시된다. 브라우저는 KIS 소켓을 직접 연결하지 않고 Spring Boot가 브리지(BFF)로 중계한다.
+
+```
+Browser ⇄ Spring /ws/realtime ⇄ KIS upstream (ws://ops.koreainvestment.com)
+```
+
+- 브라우저는 핸드셰이크 시 JWT를 쿼리 파라미터로 전달: `/ws/realtime?token={JWT}`.
+- KIS `approval_key`/appkey/appsecret은 서버에만 존재(브라우저 비노출). PINGPONG 연결 유지도 브리지가 담당.
+- **Phase 1 범위**: 실시간 호가(`H0STASP0`/`HDFSASP0`) + 체결가(`H0STCNT0`/`HDFSCNT0`). **체결통보(`H0STCNI0`/`H0GSCNI0`)는 Phase 2 보류.**
+- 상세는 [`api-server/_docs/KIS_API_GUIDE.md`](../api-server/_docs/KIS_API_GUIDE.md) §5 참고.
+
 ---
 
 ## 3. 일일 파이프라인 (Daily Pipeline @ 평일 08:50 KST)
