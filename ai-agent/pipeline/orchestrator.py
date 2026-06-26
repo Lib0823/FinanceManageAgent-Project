@@ -12,7 +12,7 @@ from ai import TradingDecisionGenerator
 from filters import SafetyFilter
 from execution import TradeExecutor
 from database import DatabaseRepository
-from config.constants import KOSPI_100
+from config.constants import KOSPI_100, STOCK_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -357,6 +357,30 @@ class PipelineOrchestrator:
                 ):
                     sentiment_saved_count += 1
             logger.info(f"Saved {sentiment_saved_count} sentiment records to news_analysis table")
+
+            # 부가 저장: 종목별 뉴스 기사 원문 + 기사별 감성/태그 (stock_news 테이블).
+            # 보조 기능이므로 실패해도 파이프라인을 중단하지 않는다(try/except 내부 격리).
+            try:
+                stock_news_map = self.sentiment_analyzer.last_stock_news
+                news_articles_saved = 0
+                news_stocks_saved = 0
+                for stock_code, news_records in stock_news_map.items():
+                    stock_name = STOCK_NAMES.get(stock_code)
+                    inserted = self.db_repo.save_stock_news(
+                        stock_code=stock_code,
+                        stock_name=stock_name,
+                        analysis_date=trade_date,
+                        articles=news_records
+                    )
+                    if inserted > 0:
+                        news_stocks_saved += 1
+                        news_articles_saved += inserted
+                logger.info(
+                    f"Saved {news_articles_saved} stock_news articles "
+                    f"across {news_stocks_saved} stocks"
+                )
+            except Exception as e:
+                logger.error(f"Failed to persist stock_news (non-critical): {e}")
 
             # Track 1(시장 전반) 영속화: analyze_stocks 가 인스턴스 속성에 저장한 값을 사용
             market_sentiment = self.sentiment_analyzer.last_market_sentiment
