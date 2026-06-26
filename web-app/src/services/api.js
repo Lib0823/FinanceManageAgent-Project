@@ -168,11 +168,11 @@ export const companyApi = {
   getDisclosures: (stockCode) => api.get(`/company/${stockCode}/disclosures`)
 }
 
-// News API (Handled by FastAPI ai-agent)
+// News API (Spring Boot api-server)
 export const newsApi = {
+  // params: { symbol?, date? } — symbol omitted → recent feed, date omitted → latest available date
   getList: (params) => api.get('/news', { params }),
-  getDetail: (id) => api.get(`/news/${id}`),
-  getByDate: (date) => api.get('/news/by-date', { params: { date } })
+  getDetail: (id) => api.get(`/news/${id}`)
 }
 
 // Market API (Handled by FastAPI ai-agent)

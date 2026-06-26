@@ -127,6 +127,10 @@ const goToNews = (news) => {
   }
 }
 
+const goToNewsFeed = () => {
+  router.push('/news')
+}
+
 const goToCompany = (symbol) => {
   router.push({
     path: `/company/${symbol}`,
@@ -506,6 +510,12 @@ onMounted(() => {
             속보가 없습니다
           </div>
         </div>
+        <button class="news-more-btn" @click="goToNewsFeed">
+          뉴스 더보기
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 18l6-6-6-6"/>
+          </svg>
+        </button>
       </section>
 
       <!-- AI Recommendations -->
@@ -958,6 +968,26 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-sm);
+}
+
+.news-more-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  margin: var(--spacing-sm) auto 0;
+  padding: var(--spacing-xs) var(--spacing-md);
+  background: none;
+  border: none;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.news-more-btn:hover {
+  color: var(--color-text-primary);
 }
 
 .news-item {
