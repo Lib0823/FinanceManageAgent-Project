@@ -1,8 +1,9 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '@/components/common/AppHeader.vue'
 import { stockApi, tradingApi, overseasApi, marketApi } from '@/services/api'
+import { useRealtimeStore } from '@/stores/realtime'
 
 const route = useRoute()
 const router = useRouter()
@@ -20,6 +21,14 @@ const rawExchange = String(route.query.exchange || '').toUpperCase()
 const isOverseas = ref(rawMarket === 'US' || VALID_EXCHANGES.includes(rawExchange))
 // 거래소 코드 (잔고·매매용 OVRS_EXCG_CD). 기본 NASD.
 const exchange = ref(VALID_EXCHANGES.includes(rawExchange) ? rawExchange : 'NASD')
+
+// 실시간 스토어 (브리지 경유 KIS WS). 'disabled'/'reconnecting'/'closed'면
+// REST 스냅샷을 그대로 유지하고, WS 프레임이 오면 아래 콜백이 ref를 갱신한다.
+const realtimeStore = useRealtimeStore()
+// store/service 프로토콜의 market: 'KR' | 'US'
+const realtimeMarket = computed(() => (isOverseas.value ? 'US' : 'KR'))
+// 활성 구독 해제 함수들 (심볼 변경/언마운트 시 정리 → 구독상한 관리)
+let realtimeUnsubs = []
 
 const orderForm = ref({
   type: 'market',
@@ -296,6 +305,72 @@ const loadMarketData = async () => {
   }
 }
 
+// ── 실시간 (KIS WS via 브리지) ─────────────────────────────────────────────
+// 정책(spec 3.3): REST 스냅샷(loadPrice/loadOrderbook)이 초기 paint + 폴백.
+// 그 위에 tick/orderbook 구독을 얹어 currentPrice/changeAmount/changeRate 및
+// orderbookAsks/bids를 갱신한다. WS JSON은 REST와 동형이므로 정렬/computed/
+// 템플릿은 무변경. disabled/reconnecting/closed면 마지막 스냅샷을 그대로 둔다.
+
+// 체결가 프레임 → 현재가/등락 갱신.
+// store 핸들러가 msg.currentPrice ?? msg.price 로 정규화하지만, 직접 콜백에서도
+// 동일하게 폴백 처리해 국내(STCK_PRPR)·해외(last) 양쪽 필드명을 흡수한다.
+const onTick = (msg) => {
+  if (!msg) return
+  const price = msg.currentPrice ?? msg.price
+  if (price != null) {
+    currentPrice.value = Number(price)
+  }
+  if (msg.changeAmount != null) {
+    changeAmount.value = Number(msg.changeAmount)
+  }
+  if (msg.changeRate != null) {
+    changeRate.value = Number(msg.changeRate)
+  }
+  // 주문 가격 입력값(orderForm.price)은 사용자가 만질 수 있으므로 tick으로
+  // 덮어쓰지 않는다 (초기 seed는 REST loadPrice/loadOverseasPrice가 담당).
+}
+
+// 호가 프레임 → 호가창 갱신. loadOrderbook과 동일한 필터/정렬을 적용해
+// 기존 렌더 경로(orderbookRows/nearestPrice)를 그대로 재사용한다.
+const onOrderbook = (msg) => {
+  if (!msg) return
+  const asks = Array.isArray(msg.asks) ? msg.asks.filter((r) => r && r.price) : []
+  const bids = Array.isArray(msg.bids) ? msg.bids.filter((r) => r && r.price) : []
+  if (asks.length === 0 && bids.length === 0) return // 빈 프레임은 마지막 스냅샷 유지
+  orderbookNotice.value = null
+  // asks: 매도호가 높은가격 순(내림차순) → 위쪽
+  orderbookAsks.value = [...asks].sort((a, b) => Number(b.price) - Number(a.price))
+  // bids: 매수호가 높은가격 순(내림차순) → 아래쪽 상단부터
+  orderbookBids.value = [...bids].sort((a, b) => Number(b.price) - Number(a.price))
+}
+
+// 현재 심볼/시장에 대한 실시간 구독 시작. 기존 구독은 먼저 정리.
+const startRealtime = () => {
+  stopRealtime()
+  const market = realtimeMarket.value
+  const sym = symbol.value
+  const exch = isOverseas.value ? exchange.value : null
+
+  // 체결가는 국내·해외 공통으로 구독.
+  realtimeUnsubs.push(realtimeStore.subscribeTick(market, sym, exch, onTick))
+
+  // 호가: 국내는 10호가, 해외는 1호가. 둘 다 동일 렌더 경로를 사용한다
+  // (해외 호가는 백엔드가 비어 보내면 onOrderbook이 무시 → 기존 '해외 호가 미지원' UI 유지).
+  realtimeUnsubs.push(realtimeStore.subscribeOrderbook(market, sym, exch, onOrderbook))
+}
+
+// 실시간 구독 전체 해제 (refCount 감소 → 0이면 서버에 해제 프레임 전송).
+const stopRealtime = () => {
+  for (const unsub of realtimeUnsubs) {
+    try {
+      if (typeof unsub === 'function') unsub()
+    } catch (e) {
+      console.error('Failed to unsubscribe realtime:', e)
+    }
+  }
+  realtimeUnsubs = []
+}
+
 const placeOrder = async () => {
   if (loading.value) return
 
@@ -401,12 +476,20 @@ const loadPendingOrders = async () => {
 
 onMounted(() => {
   loadPendingOrders()
+  // REST 스냅샷으로 초기 paint 후 실시간 구독을 얹는다 (구독 자체는 비동기 paint를
+  // 기다리지 않아도 됨 — 콜백이 도착하는 대로 ref를 갱신).
   loadMarketData()
+  startRealtime()
 })
 
-// 종목 변경 시 시세/호가/주문가능 재조회
+onBeforeUnmount(() => {
+  stopRealtime()
+})
+
+// 종목 변경 시 시세/호가/주문가능 재조회 + 실시간 재구독 (이전 심볼 구독 해제).
 watch(symbol, () => {
   loadMarketData()
+  startRealtime()
 })
 
 // 가격 변경 시 주문가능 수량/금액 갱신 (국내 전용)
@@ -427,6 +510,18 @@ const filteredOrders = computed(() => ({
   pending: pendingOrders.value,
   reserved: []
 }))
+
+// 실시간 연결 상태 배너. open이면 숨기고, degrade 상태에서만 안내 노출
+// (마지막 REST/WS 스냅샷은 그대로 유지). connecting은 잠깐이라 표시 생략.
+const realtimeNotice = computed(() => {
+  const state = realtimeStore.connectionState
+  if (state === 'open' || state === 'connecting') return null
+  if (state === 'reconnecting') return realtimeStore.notice || '실시간 연결 재시도 중…'
+  if (state === 'disabled') return realtimeStore.notice || '실시간 시세 비활성 (스냅샷 표시)'
+  // closed (구독 없음/종료) — 스냅샷만 표시되므로 별도 안내는 생략 가능하나
+  // 명시적으로 안내해 사용자 혼선을 줄인다.
+  return null
+})
 </script>
 
 <template>
@@ -463,6 +558,7 @@ const filteredOrders = computed(() => ({
           <span class="stock-current-price">—</span>
         </div>
         <p v-if="priceNotice" class="notice-text">{{ priceNotice }}</p>
+        <p v-if="realtimeNotice" class="notice-text realtime-notice">{{ realtimeNotice }}</p>
         <div class="stock-tags">
           <template v-if="isOverseas">
             <span class="tag">해외</span>
@@ -672,6 +768,10 @@ const filteredOrders = computed(() => ({
 
 .orderbook-notice {
   text-align: center;
+}
+
+.realtime-notice {
+  color: var(--color-text-secondary);
 }
 
 .stock-tags {

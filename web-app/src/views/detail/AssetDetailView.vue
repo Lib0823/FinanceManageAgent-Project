@@ -1,12 +1,23 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import AppHeader from '@/components/common/AppHeader.vue'
 import AssetTabs from '@/components/common/AssetTabs.vue'
 import { assetApi, overseasApi, marketApi } from '@/services/api'
+import { useRealtimeStore } from '@/stores/realtime'
 
 const router = useRouter()
 const route = useRoute()
+
+const realtime = useRealtimeStore()
+
+// 실시간 tick 구독 상한. KIS 연결당 구독 심볼 상한(~41, MUST-VERIFY)을
+// TradingView(호가+체결가) 등 다른 화면과 공유하므로, 자산 상세는 가시
+// 보유 종목 중 상위 N개만 보수적으로 구독한다.
+const REALTIME_SYMBOL_CAP = 15
+
+// 현재 활성화된 tick 구독 해제 함수 목록 (탭 전환/언마운트 시 정리)
+let tickUnsubs = []
 
 const tabs = ref({ main: 'stocks', sub: 'domestic' })
 const loading = ref(false)
@@ -184,6 +195,56 @@ const loadOverseasBalance = async () => {
   }
 }
 
+// ── 실시간 체결가(tick) 구독 ──────────────────────────────────────────────
+// 현재 탭의 가시 보유 종목 심볼만 tick 구독 → 카드의 currentPrice 라이브 갱신.
+// degrade(연결 disabled/reconnecting/closed)일 때는 구독만 보류하고
+// 기존 정적 잔고(currentPrice)를 그대로 유지한다(절대 0/null로 덮어쓰지 않음).
+
+// 모든 활성 tick 구독 해제.
+const clearTickSubscriptions = () => {
+  for (const unsub of tickUnsubs) {
+    try {
+      unsub()
+    } catch (e) {
+      console.error('[asset] tick unsubscribe error:', e)
+    }
+  }
+  tickUnsubs = []
+}
+
+// 현재 탭(국내/해외)의 가시 보유 종목 중 상한 내 심볼을 tick 구독.
+// 탭 전환/리스트 갱신 시 호출되며, 기존 구독을 먼저 정리한 뒤 재구독한다.
+const syncTickSubscriptions = () => {
+  clearTickSubscriptions()
+
+  const stocks = currentStocks.value
+  if (!Array.isArray(stocks) || stocks.length === 0) return
+
+  const overseas = isOverseas.value
+  const market = overseas ? 'US' : 'KR'
+
+  // 상한(top-N) 적용 — 보유 목록 앞에서부터.
+  const visible = stocks.slice(0, REALTIME_SYMBOL_CAP)
+
+  for (const stock of visible) {
+    if (!stock || stock.symbol == null) continue
+    // US tick은 거래소 코드 필요. goToTrade와 동일한 기본값(NASD) 사용.
+    const exchange = overseas ? (stock.exchange || 'NASD') : null
+    const target = stock // 콜백 클로저로 해당 카드 객체 참조
+
+    const unsub = realtime.subscribeTick(market, stock.symbol, exchange, (msg) => {
+      // REST DTO 호환: currentPrice 우선, 없으면 price.
+      const next = msg.currentPrice ?? msg.price
+      const n = Number(next)
+      // 유효한 양수 가격만 반영(0/NaN은 degrade로 간주하고 기존값 유지).
+      if (Number.isFinite(n) && n > 0) {
+        target.currentPrice = n
+      }
+    })
+    tickUnsubs.push(unsub)
+  }
+}
+
 // URL 쿼리에서 초기 탭 설정 및 데이터 로드
 onMounted(async () => {
   if (route.query.main) {
@@ -195,6 +256,33 @@ onMounted(async () => {
 
   // Load data
   await Promise.all([loadHoldings(), loadBalance(), loadOverseasBalance(), loadExchangeRate()])
+
+  // 데이터 로드 후 현재 탭 기준 tick 구독 시작 (주식 탭에서만 의미).
+  syncTickSubscriptions()
+})
+
+// 탭(main: stocks/cash, sub: domestic/overseas) 변경 시 구독 재동기화.
+// 현금 탭에서는 가시 종목이 없으므로 구독이 모두 해제된다.
+watch(
+  () => [tabs.value.main, tabs.value.sub],
+  () => {
+    if (tabs.value.main === 'stocks') {
+      syncTickSubscriptions()
+    } else {
+      clearTickSubscriptions()
+    }
+  }
+)
+
+// 보유 목록이 비동기로 채워질 수 있으므로, 현재 탭 목록 변경 시에도 재동기화.
+watch(currentStocks, () => {
+  if (tabs.value.main === 'stocks') {
+    syncTickSubscriptions()
+  }
+})
+
+onBeforeUnmount(() => {
+  clearTickSubscriptions()
 })
 
 const formatNumber = (n) => {
