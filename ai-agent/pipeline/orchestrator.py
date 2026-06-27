@@ -5,7 +5,7 @@ import pandas as pd
 from datetime import date
 from typing import Optional, Dict, List
 
-from collectors import KISClient
+from collectors import KISClient, InternalApiClient
 from collectors.dart_client import DARTAPIClient
 from analysis import StockFilter, QuantitativeAnalyzer, SentimentAnalyzer, TimeSeriesAnalyzer
 from ai import TradingDecisionGenerator
@@ -13,6 +13,7 @@ from filters import SafetyFilter
 from execution import TradeExecutor
 from database import DatabaseRepository
 from config.constants import KOSPI_100, STOCK_NAMES
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,9 @@ class PipelineOrchestrator:
     4. Save results to database
     """
 
-    def __init__(self, api_server_url: str = "http://api-server:7070"):
+    def __init__(self, api_server_url: Optional[str] = None):
+        resolved_url = api_server_url or settings.api_server_url
+
         # Stage 1: Filtering
         self.kis_client = KISClient()  # Single shared instance for OAuth token caching
         self.stock_filter = StockFilter()
@@ -45,11 +48,20 @@ class PipelineOrchestrator:
         # Stage 5: Safety Filter
         self.safety_filter = SafetyFilter()
 
+        # Internal api-server channel (multi-user holdings / decisions / execution)
+        self.internal_api = InternalApiClient(
+            base_url=resolved_url, api_key=settings.internal_api_key
+        )
+
         # Stage 6: Trade Execution
-        self.trade_executor = TradeExecutor(api_base_url=api_server_url)
+        self.trade_executor = TradeExecutor(api_base_url=resolved_url)
 
         # Database
         self.db_repo = DatabaseRepository()
+
+        # 멀티유저 컨텍스트 (Step 0-1 에서 채워지고 이후 단계가 사용)
+        self.active_users: List[Dict] = []
+        self.user_holdings_map: Dict[int, List[str]] = {}
 
         logger.info("PipelineOrchestrator initialized with full pipeline")
 
@@ -93,25 +105,49 @@ class PipelineOrchestrator:
                     'is_holiday': True
                 }
 
-            # Step 0-1: Fetch holdings from KIS API (to always include in final 30)
-            logger.info("Fetching holdings from KIS API...")
-            api_holdings = await self.kis_client.get_holdings()
+            # Step 0-1: 활성 자동매매 유저 + 보유종목 합집합 수집 (멀티유저).
+            # 사용자 KIS 키는 api-server(DB)에만 있고, ai-agent 는 내부 서비스 채널로
+            # 식별자/보유종목만 받는다. 보유종목 합집합을 Top30 분석 유니버스에 강제 포함한다.
+            logger.info("Fetching active auto-trading users and holdings from api-server...")
+            active_users = await self.internal_api.get_active_auto_trading_users()
+            self.active_users = active_users
 
-            # Merge with parameter holdings (if provided)
-            if holdings and api_holdings:
-                holdings = list(set(holdings + api_holdings))  # Remove duplicates
-            elif api_holdings:
-                holdings = api_holdings
-            # If neither exists, holdings remains None
+            user_holdings_map: Dict[int, List[str]] = {}
+            if active_users:
+                holdings_lists = await asyncio.gather(
+                    *[self.internal_api.get_user_holdings(u['user_id']) for u in active_users],
+                    return_exceptions=True
+                )
+                for user, codes in zip(active_users, holdings_lists):
+                    if isinstance(codes, Exception):
+                        logger.error(f"Holdings fetch failed for user {user['user_id']}: {codes}")
+                        codes = []
+                    user_holdings_map[user['user_id']] = codes
+            self.user_holdings_map = user_holdings_map
 
+            union_holdings = sorted({code for codes in user_holdings_map.values() for code in codes})
+
+            # Merge with explicit parameter holdings (if provided)
+            merged = set(holdings or []) | set(union_holdings)
+            holdings = sorted(merged) if merged else None
+
+            logger.info(
+                f"Active users: {len(active_users)}, "
+                f"union holdings ({len(union_holdings)}): {union_holdings}"
+            )
             if holdings:
-                logger.info(f"Found {len(holdings)} holdings to always include: {holdings}")
+                logger.info(f"{len(holdings)} holdings will be force-included in analysis universe")
             else:
                 logger.info("No holdings found, will use only Top 30 filtered stocks")
 
-            # Step 1: Fetch KOSPI 100 data from KIS API
-            logger.info(f"Fetching data for {len(KOSPI_100)} KOSPI 100 stocks")
-            stock_data_df = await self.kis_client.fetch_stock_data_parallel(KOSPI_100)
+            # Step 1: Fetch data for KOSPI 100 ∪ holdings (so holdings outside KOSPI100
+            # are also analyzable and force-includable in the final selection)
+            universe = list(dict.fromkeys(KOSPI_100 + (holdings or [])))
+            logger.info(
+                f"Fetching data for {len(universe)} stocks "
+                f"(KOSPI100 {len(KOSPI_100)} + {len(holdings or [])} holdings)"
+            )
+            stock_data_df = await self.kis_client.fetch_stock_data_parallel(universe)
 
             if stock_data_df.empty:
                 error_msg = "Failed to fetch stock data from KIS API"
