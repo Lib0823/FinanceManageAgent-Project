@@ -53,8 +53,8 @@ class PipelineOrchestrator:
             base_url=resolved_url, api_key=settings.internal_api_key
         )
 
-        # Stage 6: Trade Execution
-        self.trade_executor = TradeExecutor(api_base_url=resolved_url)
+        # Stage 6: Trade Execution (per-user, via internal api-server channel)
+        self.trade_executor = TradeExecutor(internal_api=self.internal_api)
 
         # Database
         self.db_repo = DatabaseRepository()
@@ -62,6 +62,7 @@ class PipelineOrchestrator:
         # 멀티유저 컨텍스트 (Step 0-1 에서 채워지고 이후 단계가 사용)
         self.active_users: List[Dict] = []
         self.user_holdings_map: Dict[int, List[str]] = {}
+        self.user_portfolio_map: Dict[int, Dict] = {}
 
         logger.info("PipelineOrchestrator initialized with full pipeline")
 
@@ -112,17 +113,22 @@ class PipelineOrchestrator:
             active_users = await self.internal_api.get_active_auto_trading_users()
             self.active_users = active_users
 
+            # 유저별 포트폴리오 전체(보유상세 + 현금)를 한 번에 조회해 stash.
+            # Step 0-1 의 보유 합집합과 Stage 6 의 유저별 매수/매도 판단이 같은 스냅샷을 재사용.
+            user_portfolio_map: Dict[int, Dict] = {}
             user_holdings_map: Dict[int, List[str]] = {}
             if active_users:
-                holdings_lists = await asyncio.gather(
-                    *[self.internal_api.get_user_holdings(u['user_id']) for u in active_users],
+                portfolios = await asyncio.gather(
+                    *[self.internal_api.get_user_portfolio(u['user_id']) for u in active_users],
                     return_exceptions=True
                 )
-                for user, codes in zip(active_users, holdings_lists):
-                    if isinstance(codes, Exception):
-                        logger.error(f"Holdings fetch failed for user {user['user_id']}: {codes}")
-                        codes = []
-                    user_holdings_map[user['user_id']] = codes
+                for user, pf in zip(active_users, portfolios):
+                    if isinstance(pf, Exception):
+                        logger.error(f"Portfolio fetch failed for user {user['user_id']}: {pf}")
+                        pf = {'holdings': [], 'cash': 0.0, 'total_assets': 0.0, 'holding_codes': []}
+                    user_portfolio_map[user['user_id']] = pf
+                    user_holdings_map[user['user_id']] = pf.get('holding_codes', [])
+            self.user_portfolio_map = user_portfolio_map
             self.user_holdings_map = user_holdings_map
 
             union_holdings = sorted({code for codes in user_holdings_map.values() for code in codes})
@@ -514,11 +520,13 @@ class PipelineOrchestrator:
                 'filter_results': filtered_decisions['filter_results']
             }
 
-            # Stage 6: Trade Execution
-            logger.info("[Stage 6] Trade Execution")
-            execution_results = await self.trade_executor.execute_trades(filtered_decisions)
+            # Stage 6: Per-user decision + execution (multi-user).
+            # 무거운 분석(Stage 1~3)은 공유, Stage 4~5(전역 결정/안전망)는 대시보드용으로 유지.
+            # 여기서 각 활성 유저의 포트폴리오 맥락으로 Gemini 1콜 → 안전망(유저 예산/현금) → 실행.
+            logger.info("[Stage 6] Per-user decision and execution")
+            execution_results = await self._run_per_user_execution(features_df)
 
-            logger.info(f"[Stage 6] Execution status: {execution_results['status']}")
+            logger.info(f"[Stage 6] Per-user execution complete: {len(execution_results)} users")
             pipeline_result['stages']['stage6_execution'] = execution_results
 
             # Final success
@@ -532,6 +540,119 @@ class PipelineOrchestrator:
             logger.exception(error_msg)
             pipeline_result['error'] = error_msg
             return pipeline_result
+
+    async def _run_per_user_execution(self, features_df: pd.DataFrame) -> List[Dict]:
+        """
+        활성 유저별 맞춤 매수/매도 결정 + 실행 (Stage 6, 멀티유저).
+
+        분석(features_df)은 공유. 각 유저의 포트폴리오 맥락으로 Gemini 1콜(throttle 적용),
+        매수는 안전망(SafetyFilter) + 1회 한도/현금으로 수량 산정, 매도는 보유(매도가능) 수량만큼.
+        유저 단위로 격리한다(한 유저의 결정/실행 실패가 다른 유저를 막지 않음).
+
+        Args:
+            features_df: 분석 유니버스 11피처 (매수 후보 풀)
+
+        Returns:
+            유저별 실행 결과 리스트
+        """
+        results: List[Dict] = []
+        if not self.active_users:
+            logger.info("[Stage 6] No active auto-trading users; nothing to execute")
+            return results
+
+        price_cache: Dict[str, int] = {}
+
+        async def get_price(code: str) -> int:
+            if code not in price_cache:
+                try:
+                    data = await self.kis_client.get_current_price(code)
+                    price_cache[code] = int(data.get('current_price') or 0)
+                except Exception as e:
+                    logger.warning(f"Price fetch failed for {code}: {e}")
+                    price_cache[code] = 0
+            return price_cache[code]
+
+        for user in self.active_users:
+            user_id = user['user_id']
+            order_amount = int(user.get('order_amount') or 0)
+            max_holdings = int(user.get('max_holdings') or 0)
+            portfolio = self.user_portfolio_map.get(
+                user_id, {'holdings': [], 'cash': 0.0, 'total_assets': 0.0, 'holding_codes': []}
+            )
+
+            # 1) 유저 맞춤 매수/매도 결정 (Gemini 1콜, throttle/백오프는 클라이언트 내부)
+            try:
+                decision = self.decision_generator.generate_user_decision(
+                    candidate_features=features_df,
+                    portfolio=portfolio,
+                    order_amount=order_amount,
+                    max_holdings=max_holdings,
+                    user_id=user_id,
+                )
+            except Exception as e:
+                logger.error(f"[Stage 6] Decision failed for user {user_id}: {e}")
+                results.append({'user_id': user_id, 'error': f'decision failed: {e}'})
+                continue
+
+            held_codes = set(portfolio.get('holding_codes', []))
+            held_map = {h['stock_code']: h for h in portfolio.get('holdings', [])}
+
+            # 2) 매수 주문: 이미 보유한 종목 제외 → 안전망(SafetyFilter) → 한도/현금으로 수량 산정
+            buy_candidates = [b for b in decision.get('buy', []) if b['stock_code'] not in held_codes]
+            buy_prices = {b['stock_code']: await get_price(b['stock_code']) for b in buy_candidates}
+            filtered = self.safety_filter.filter_decisions(
+                {'buy_top3': buy_candidates, 'sell_top3': []},
+                features_df,
+                stock_prices=buy_prices,
+                order_amount=order_amount,
+            )
+            cash = float(portfolio.get('cash') or 0)
+            buy_orders: List[Dict] = []
+            for b in filtered.get('buy_top3', []):
+                code = b['stock_code']
+                price = buy_prices.get(code, 0)
+                if price <= 0:
+                    continue
+                max_q = int(b.get('max_quantity') or 0)  # order_amount 기반 상한
+                cash_q = int(cash / price) if cash > 0 else max_q
+                qty = min(max_q, cash_q) if cash > 0 else max_q
+                if qty <= 0:
+                    continue
+                cash -= qty * price
+                buy_orders.append({
+                    'stock_code': code,
+                    'stock_name': STOCK_NAMES.get(code, code),
+                    'quantity': qty,
+                    'reason': b.get('reason', ''),
+                })
+
+            # 3) 매도 주문: 보유 종목 중 AI 매도 결정, 매도가능 수량만큼
+            sell_orders: List[Dict] = []
+            for s in decision.get('sell', []):
+                h = held_map.get(s['stock_code'])
+                if not h:
+                    continue
+                qty = int(h.get('available_quantity') or h.get('quantity') or 0)
+                if qty <= 0:
+                    continue
+                sell_orders.append({
+                    'stock_code': s['stock_code'],
+                    'stock_name': h.get('stock_name', s['stock_code']),
+                    'quantity': qty,
+                    'reason': s.get('reason', ''),
+                })
+
+            logger.info(f"[Stage 6] user {user_id}: {len(buy_orders)} buys, {len(sell_orders)} sells planned")
+
+            # 4) 실행 (유저 KIS 키로 api-server 대행)
+            try:
+                exec_result = await self.trade_executor.execute_for_user(user_id, buy_orders, sell_orders)
+            except Exception as e:
+                logger.error(f"[Stage 6] Execution failed for user {user_id}: {e}")
+                exec_result = {'user_id': user_id, 'error': f'execution failed: {e}'}
+            results.append(exec_result)
+
+        return results
 
     def run_complete_pipeline_sync(
         self,
