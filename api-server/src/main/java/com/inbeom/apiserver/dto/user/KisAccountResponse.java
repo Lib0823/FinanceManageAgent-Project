@@ -18,6 +18,7 @@ public class KisAccountResponse {
     private String accountProductCode;
     private String appKey;
     private String appSecret;
+    private String htsId;
     private Boolean isVerified;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

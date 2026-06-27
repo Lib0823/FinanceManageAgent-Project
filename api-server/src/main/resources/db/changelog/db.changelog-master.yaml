@@ -60,6 +60,11 @@ databaseChangeLog:
       file: classpath:db/changelog/mvp/v1.10-stock-news.yaml
       context: mvp
 
+  # Phase 12: KIS HTS ID for Realtime Fill Notifications
+  - include:
+      file: classpath:db/changelog/mvp/v1.11-kis-account-hts-id.yaml
+      context: mvp
+
   # ========================================
   # Product Context Changelogs (Future)
   # ========================================

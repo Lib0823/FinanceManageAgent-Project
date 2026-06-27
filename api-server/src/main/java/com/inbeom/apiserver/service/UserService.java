@@ -289,6 +289,7 @@ public class UserService {
                 .accountProductCode(kisAccount.getAccountProductCode())
                 .appKey(kisAccount.getAppKey())
                 .appSecret(kisAccount.getAppSecret())
+                .htsId(kisAccount.getHtsId())
                 .isVerified(kisAccount.getIsVerified())
                 .createdAt(kisAccount.getCreatedAt())
                 .updatedAt(kisAccount.getUpdatedAt())
@@ -320,6 +321,10 @@ public class UserService {
         kisAccount.setAccountNumber(request.getAccountNumber());
         kisAccount.setAppKey(request.getAppKey());
         kisAccount.setAppSecret(request.getAppSecret());
+        // HTS ID (체결통보 tr_key) — 선택값. 제공된 경우에만 반영.
+        if (request.getHtsId() != null) {
+            kisAccount.setHtsId(request.getHtsId());
+        }
         // Reset verification status when credentials are changed
         kisAccount.setIsVerified(false);
 
@@ -331,6 +336,7 @@ public class UserService {
                 .accountProductCode(kisAccount.getAccountProductCode())
                 .appKey(kisAccount.getAppKey())
                 .appSecret(kisAccount.getAppSecret())
+                .htsId(kisAccount.getHtsId())
                 .isVerified(kisAccount.getIsVerified())
                 .createdAt(kisAccount.getCreatedAt())
                 .updatedAt(kisAccount.getUpdatedAt())

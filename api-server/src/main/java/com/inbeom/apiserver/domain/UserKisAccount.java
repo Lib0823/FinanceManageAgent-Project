@@ -37,6 +37,10 @@ public class UserKisAccount {
     @Column(name = "app_secret", nullable = false, length = 255)
     private String appSecret;
 
+    // KIS HTS ID — 체결통보(실시간 fill) tr_key. 시세와 무관하며 평문 저장(Jasypt 암호화 안 함).
+    @Column(name = "hts_id", length = 50)
+    private String htsId;
+
     @Builder.Default
     @Column(name = "is_verified", nullable = false)
     private Boolean isVerified = false;
