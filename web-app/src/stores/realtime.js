@@ -29,6 +29,11 @@ export const useRealtimeStore = defineStore('realtime', () => {
   // ticks: { currentPrice, changeAmount, changeRate, volume, accVolume, ts }
   const ticks = ref({})
 
+  // 체결통보(fills). 계좌 단위 → 종목 무관. 최근 20건 ring buffer + 최신 1건.
+  const FILLS_RING_SIZE = 20
+  const recentFills = ref([])
+  const lastFill = ref(null)
+
   // 상태 리스너 등록 (1회). client 싱글톤이라 store도 싱글톤이지만 방어.
   let statusUnsub = null
   function ensureStatusListener() {
@@ -97,6 +102,27 @@ export const useRealtimeStore = defineStore('realtime', () => {
     return realtimeClient.subscribe(market, symbol, 'tick', exchange || null, handler)
   }
 
+  /**
+   * 체결통보(fills) 구독. 계좌 단위 단일 스트림 → App 전역 1회 구독 권장.
+   * recentFills(최근 20 ring) / lastFill을 갱신하고, 선택 콜백으로도 전달한다.
+   * @param {function} [cb] (fill) => void 선택 콜백 (store 갱신과 별개로 직접 처리용)
+   * @returns {function} 해제 함수
+   */
+  function subscribeFills(cb) {
+    ensureStatusListener()
+    const handler = (msg) => {
+      lastFill.value = msg
+      // 최신을 앞에 두고 20건 유지 (ring). 불변 갱신으로 반응성 보장.
+      const next = [msg, ...recentFills.value]
+      if (next.length > FILLS_RING_SIZE) {
+        next.length = FILLS_RING_SIZE
+      }
+      recentFills.value = next
+      if (typeof cb === 'function') cb(msg)
+    }
+    return realtimeClient.subscribeFills(handler)
+  }
+
   /** 심볼별 최신 호가 조회 (없으면 null). */
   function getQuote(market, symbol) {
     return quotes.value[dataKey(market, symbol)] || null
@@ -113,10 +139,13 @@ export const useRealtimeStore = defineStore('realtime', () => {
     notice,
     quotes,
     ticks,
+    recentFills,
+    lastFill,
 
     // Actions
     subscribeOrderbook,
     subscribeTick,
+    subscribeFills,
 
     // Getters
     getQuote,

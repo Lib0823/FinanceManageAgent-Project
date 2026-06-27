@@ -41,6 +41,10 @@ function deriveWsUrl() {
   return `${wsOrigin}/ws/realtime`
 }
 
+// 체결통보(fills)는 종목이 없는 계좌 단위 스트림이라 market/symbol/type 키 조합을 쓰지 않는다.
+// 전용 this.fillsSub(refCount + 콜백 Set)로 dedupe/라우팅하고, 와이어 프로토콜은
+// {action, type:'fills'}로 보낸다. (별도 문자열 키 불필요)
+
 /** 구독 dedupe 키. (서버 SubKey와 무관 — 클라이언트 측 콜백 라우팅용) */
 function subKey(market, symbol, type) {
   return `${market}:${symbol}:${type}`
@@ -61,6 +65,10 @@ class RealtimeClient {
     this.subscriptions = new Map()
     // 상태 변화 리스너 Set<fn(state, notice)>
     this.statusListeners = new Set()
+
+    // 체결통보(fills) 구독: 계좌 단위 단일 스트림. refCount + 콜백 Set.
+    // { refCount, callbacks:Set<fn> }
+    this.fillsSub = { refCount: 0, callbacks: new Set() }
 
     this.reconnectAttempts = 0
     this.reconnectTimer = null
@@ -153,8 +161,8 @@ class RealtimeClient {
   _scheduleReconnect() {
     if (this.intentionalClose) return
     if (this.reconnectTimer) return
-    // 재등록할 구독이 하나도 없으면 굳이 재연결하지 않는다.
-    if (this.subscriptions.size === 0) {
+    // 재등록할 구독(심볼 or 체결통보)이 하나도 없으면 굳이 재연결하지 않는다.
+    if (this.subscriptions.size === 0 && this.fillsSub.refCount === 0) {
       this._setState('closed')
       return
     }
@@ -185,6 +193,19 @@ class RealtimeClient {
     if (msg.type === 'status') {
       // 서버 측 degrade/reconnect 통지.
       this._setState(msg.state || this.state, msg.notice)
+      return
+    }
+
+    // 체결통보(fill) 라우팅: symbol 가드보다 먼저 처리.
+    // 체결통보 프레임은 종목(symbol)이 있더라도 계좌 단위 fills 콜백으로 보낸다.
+    if (msg.type === 'fill') {
+      for (const cb of this.fillsSub.callbacks) {
+        try {
+          cb(msg)
+        } catch (e) {
+          console.error('[realtime] fills callback error:', e)
+        }
+      }
       return
     }
 
@@ -265,6 +286,48 @@ class RealtimeClient {
     }
   }
 
+  /**
+   * 체결통보 구독. 계좌 단위 단일 스트림 → 고정 키 + refCount.
+   * @param {function} cb (msg) => void 체결통보 프레임 콜백
+   * @returns {function} 해제 함수
+   */
+  subscribeFills(cb) {
+    if (typeof cb === 'function') {
+      this.fillsSub.callbacks.add(cb)
+    }
+    this.fillsSub.refCount += 1
+
+    // 첫 ref면 서버에 등록 프레임 전송 (이미 연결돼 있을 때).
+    if (this.fillsSub.refCount === 1) {
+      this._sendSubscribeFills()
+    }
+
+    // 연결이 없으면 시작.
+    this.connect()
+
+    return () => this.unsubscribeFills(cb)
+  }
+
+  /** 체결통보 해제. refCount 0 도달 시 서버에 해제 프레임 전송. */
+  unsubscribeFills(cb) {
+    if (typeof cb === 'function') {
+      this.fillsSub.callbacks.delete(cb)
+    }
+    this.fillsSub.refCount = Math.max(0, this.fillsSub.refCount - 1)
+
+    if (this.fillsSub.refCount === 0) {
+      this._sendUnsubscribeFills()
+    }
+  }
+
+  _sendSubscribeFills() {
+    this._send({ action: 'subscribe', type: 'fills' })
+  }
+
+  _sendUnsubscribeFills() {
+    this._send({ action: 'unsubscribe', type: 'fills' })
+  }
+
   _sendSubscribe(sub) {
     this._send({
       action: 'subscribe',
@@ -303,6 +366,10 @@ class RealtimeClient {
         this._sendSubscribe(sub)
       }
     }
+    // 체결통보(fills)도 재연결 시 재구독.
+    if (this.fillsSub.refCount > 0) {
+      this._sendSubscribeFills()
+    }
   }
 
   /** 전체 종료 (의도적). 모든 구독/타이머 정리. */
@@ -313,6 +380,8 @@ class RealtimeClient {
       this.reconnectTimer = null
     }
     this.subscriptions.clear()
+    this.fillsSub.refCount = 0
+    this.fillsSub.callbacks.clear()
     if (this.ws) {
       try {
         this.ws.close()
