@@ -61,6 +61,11 @@ jwt:
   access-token-expiration: 3600000    # 1 hour (ms)
   refresh-token-expiration: 86400000  # 24 hours (ms)
 
+# Internal service-to-service API (ai-agent → api-server, /internal/**).
+# X-Internal-Api-Key 헤더로 인증(InternalAuthFilter). 운영에서는 반드시 INTERNAL_API_KEY 로 override.
+internal:
+  api-key: ${INTERNAL_API_KEY:financemanage-internal-service-key-change-in-production}
+
 # Jasypt Configuration (Updated to secure algorithm)
 jasypt:
   encryptor:
@@ -102,6 +107,18 @@ kis:
     ws-url: ${KIS_REALTIME_WS_URL:ws://ops.koreainvestment.com:21000}
     max-symbols: ${KIS_REALTIME_MAX_SYMBOLS:40}
     frame-debug: ${KIS_REALTIME_FRAME_DEBUG:false}
+
+    # 실시간 체결통보(fill notification) — Phase 2 (KR 전용, 사용자 계좌키 + AES 암호 프레임).
+    # - enabled=false(기본): 레지스트리/팩토리 빈 미생성 → 핸들러는 fills 요청에 disabled 안내(graceful degrade). Phase 1 무영향.
+    # - ws-url: 모의 ws://ops.koreainvestment.com:31000 (체결통보=모의 trade 도메인 :31000; 시세 real :21000 과 별개, 교차 금지).
+    # - tr_key = 사용자 HTS ID(user_kis_accounts.hts_id), tr_id = 모의 H0STCNI9 / 실전 H0STCNI0 (ws-url 도메인으로 선택).
+    # - approval/계정키 = 사용자 appkey/secret + kis.base-url(모의). AES key/iv = 구독 ACK output.{key,iv}.
+    # - frame-debug: true 면 첫 복호 체결 프레임의 index→value 를 1회 로깅(필드 인덱스/CNTG_YN/SELN_BYOV_CLS MUST-VERIFY 확정용; 계좌/주문정보 포함 → 운영 false).
+    # - 리스크 #1(MUST-VERIFY): 모의(H0STCNI9)가 체결통보 스트리밍을 지원하는지 불확실. 미지원이면 실계좌 전용.
+    fills:
+      enabled: ${KIS_REALTIME_FILLS_ENABLED:false}
+      ws-url: ${KIS_REALTIME_FILLS_WS_URL:ws://ops.koreainvestment.com:31000}
+      frame-debug: ${KIS_REALTIME_FILLS_FRAME_DEBUG:false}
 
 # DART (금융감독원 전자공시) Open API Configuration
 dart:

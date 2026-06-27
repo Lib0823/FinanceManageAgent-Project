@@ -3,9 +3,11 @@ package com.inbeom.apiserver.realtime.config;
 import com.inbeom.apiserver.realtime.JwtHandshakeInterceptor;
 import com.inbeom.apiserver.realtime.RealtimeWebSocketHandler;
 import com.inbeom.apiserver.realtime.SubscriptionManager;
+import com.inbeom.apiserver.realtime.UserRealtimeConnectionRegistry;
 import com.inbeom.apiserver.service.KisQuoteService;
 import com.inbeom.apiserver.util.JwtTokenProvider;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -34,6 +36,8 @@ public class RealtimeWebSocketConfig implements WebSocketConfigurer {
     private final KisQuoteService kisQuoteService;
     private final JwtTokenProvider jwtTokenProvider;
     private final ObjectMapper objectMapper;
+    /** 체결통보 레지스트리(fills 비활성 시 빈 미생성 → ObjectProvider 로 optional 주입). */
+    private final ObjectProvider<UserRealtimeConnectionRegistry> fillsRegistryProvider;
 
     /** WebConfig CORS allowedOriginPatterns 미러 (dev LAN 패턴 포함). */
     private static final String[] ALLOWED_ORIGIN_PATTERNS = {
@@ -47,7 +51,9 @@ public class RealtimeWebSocketConfig implements WebSocketConfigurer {
 
     @Bean
     public RealtimeWebSocketHandler realtimeWebSocketHandler() {
-        return new RealtimeWebSocketHandler(subscriptionManager, kisQuoteService, objectMapper);
+        return new RealtimeWebSocketHandler(
+                subscriptionManager, kisQuoteService, objectMapper,
+                fillsRegistryProvider.getIfAvailable());
     }
 
     @Bean
