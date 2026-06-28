@@ -193,19 +193,22 @@ public class TradingService {
 
         // 봇(AI) 자동매매 주문번호(ODNO) 집합 — 거래내역에 AI 매매 배지를 달기 위한 매칭.
         // DB 조회 실패는 비핵심이므로 빈 집합으로 degrade(거래내역 자체는 정상 반환).
-        Set<String> aiOrderNos;
+        // 봇(AI) 자동매매 주문 키 집합 "yyyy-MM-dd|ODNO" — 거래내역 AI 배지 매칭.
+        // ODNO는 당일 채번이라 (주문일자 + 주문번호)로 매칭해야 다른 날 동일 ODNO 오매칭을 방지한다.
+        // DB 조회 실패는 비핵심이므로 빈 집합으로 degrade(거래내역 자체는 정상 반환).
+        Set<String> aiKeys;
         try {
-            aiOrderNos = tradeExecutionPlanRepository.findExecutedOrderNos(userId);
+            aiKeys = tradeExecutionPlanRepository.findExecutedOrderKeys(userId);
         } catch (Exception e) {
-            log.warn("Failed to load AI order numbers for userId={}: {}", userId, e.getMessage());
-            aiOrderNos = java.util.Collections.emptySet();
+            log.warn("Failed to load AI order keys for userId={}: {}", userId, e.getMessage());
+            aiKeys = java.util.Collections.emptySet();
         }
-        final Set<String> aiSet = aiOrderNos;
+        final Set<String> aiSet = aiKeys;
 
         return response.getBody().getOutput1().stream()
                 .map(this::mapToTradeHistoryResponse)
                 .map(t -> {
-                    t.setAiTraded(aiSet.contains(t.getId()));
+                    t.setAiTraded(aiSet.contains(t.getOrderDate() + "|" + t.getId()));
                     return t;
                 })
                 .collect(Collectors.toList());
