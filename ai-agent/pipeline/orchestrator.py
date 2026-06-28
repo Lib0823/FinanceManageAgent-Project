@@ -524,7 +524,7 @@ class PipelineOrchestrator:
             # 무거운 분석(Stage 1~3)은 공유, Stage 4~5(전역 결정/안전망)는 대시보드용으로 유지.
             # 여기서 각 활성 유저의 포트폴리오 맥락으로 Gemini 1콜 → 안전망(유저 예산/현금) → 실행.
             logger.info("[Stage 6] Per-user decision and execution")
-            execution_results = await self._run_per_user_execution(features_df)
+            execution_results = await self._run_per_user_execution(features_df, trade_date)
 
             logger.info(f"[Stage 6] Per-user execution complete: {len(execution_results)} users")
             pipeline_result['stages']['stage6_execution'] = execution_results
@@ -541,7 +541,7 @@ class PipelineOrchestrator:
             pipeline_result['error'] = error_msg
             return pipeline_result
 
-    async def _run_per_user_execution(self, features_df: pd.DataFrame) -> List[Dict]:
+    async def _run_per_user_execution(self, features_df: pd.DataFrame, trade_date: date) -> List[Dict]:
         """
         활성 유저별 맞춤 매수/매도 결정 + 실행 (Stage 6, 멀티유저).
 
@@ -623,6 +623,7 @@ class PipelineOrchestrator:
                     'stock_code': code,
                     'stock_name': STOCK_NAMES.get(code, code),
                     'quantity': qty,
+                    'price': price,
                     'reason': b.get('reason', ''),
                 })
 
@@ -650,9 +651,58 @@ class PipelineOrchestrator:
             except Exception as e:
                 logger.error(f"[Stage 6] Execution failed for user {user_id}: {e}")
                 exec_result = {'user_id': user_id, 'error': f'execution failed: {e}'}
+
+            # 영속화: 유저별 실행 결과를 trade_execution_plan 에 기록 (비핵심: 실패해도 진행)
+            try:
+                exec_records = self._build_execution_records(buy_orders, sell_orders, exec_result)
+                if exec_records:
+                    self.db_repo.save_trade_execution_plan(user_id, trade_date, exec_records)
+            except Exception as e:
+                logger.error(f"[Stage 6] Failed to persist execution for user {user_id}: {e}")
+
             results.append(exec_result)
 
         return results
+
+    @staticmethod
+    def _build_execution_records(buy_orders: List[Dict], sell_orders: List[Dict], exec_result: Dict) -> List[Dict]:
+        """유저별 buy/sell 주문 + 실행결과 → trade_execution_plan 레코드 리스트."""
+        records: List[Dict] = []
+        buy_res = {r['stock_code']: r.get('result', {}) for r in (exec_result.get('buy_results') or [])}
+        for i, o in enumerate(buy_orders, 1):
+            res = buy_res.get(o['stock_code'], {})
+            price = int(o.get('price') or 0)
+            qty = int(o.get('quantity') or 0)
+            records.append({
+                'stock_code': o['stock_code'],
+                'stock_name': o.get('stock_name'),
+                'trade_type': 'BUY',
+                'planned_quantity': qty,
+                'reference_price': price or None,
+                'estimated_amount': (price * qty) or None,
+                'gemini_reason': o.get('reason', ''),
+                'gemini_rank': i,
+                'safety_filter_passed': True,
+                'execution_status': 'EXECUTED' if res.get('success') else 'FAILED',
+                'execution_result': res,
+            })
+        sell_res = {r['stock_code']: r.get('result', {}) for r in (exec_result.get('sell_results') or [])}
+        for i, o in enumerate(sell_orders, 1):
+            res = sell_res.get(o['stock_code'], {})
+            records.append({
+                'stock_code': o['stock_code'],
+                'stock_name': o.get('stock_name'),
+                'trade_type': 'SELL',
+                'planned_quantity': int(o.get('quantity') or 0),
+                'reference_price': None,
+                'estimated_amount': None,
+                'gemini_reason': o.get('reason', ''),
+                'gemini_rank': i,
+                'safety_filter_passed': True,
+                'execution_status': 'EXECUTED' if res.get('success') else 'FAILED',
+                'execution_result': res,
+            })
+        return records
 
     def run_complete_pipeline_sync(
         self,

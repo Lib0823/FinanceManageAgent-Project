@@ -882,3 +882,70 @@ class DatabaseRepository:
         except Exception as e:
             logger.error(f"Failed to fetch user order_amount: {e}")
             return 1_000_000  # Fallback to default
+
+    def save_trade_execution_plan(self, user_id, execution_date, records) -> int:
+        """
+        유저별 매수/매도 실행 결과를 trade_execution_plan 에 기록 (멀티유저, 멱등).
+
+        (user_id, execution_date) 키의 기존 행을 삭제 후 재삽입한다(재실행 중복 방지).
+
+        Args:
+            user_id: 사용자 id
+            execution_date: 실행일(date)
+            records: [{stock_code, stock_name, trade_type('BUY'|'SELL'), planned_quantity,
+                       reference_price, estimated_amount, gemini_reason, gemini_rank,
+                       safety_filter_passed, execution_status, execution_result(dict)}]
+
+        Returns:
+            int: 삽입한 행 수 (실패 시 0)
+        """
+        if not records:
+            return 0
+
+        insert_sql = text("""
+            INSERT INTO trade_execution_plan
+                (user_id, execution_date, stock_code, stock_name, trade_type,
+                 planned_quantity, reference_price, estimated_amount, gemini_reason,
+                 gemini_rank, safety_filter_passed, execution_status, executed_at,
+                 execution_result)
+            VALUES
+                (:user_id, :execution_date, :stock_code, :stock_name, :trade_type,
+                 :planned_quantity, :reference_price, :estimated_amount, :gemini_reason,
+                 :gemini_rank, :safety_filter_passed, :execution_status, now(),
+                 CAST(:execution_result AS JSONB))
+        """)
+
+        params = []
+        for r in records:
+            params.append({
+                'user_id': user_id,
+                'execution_date': execution_date,
+                'stock_code': r['stock_code'],
+                'stock_name': (r.get('stock_name') or r['stock_code'])[:100],
+                'trade_type': str(r['trade_type'])[:4],
+                'planned_quantity': int(r.get('planned_quantity') or 0),
+                'reference_price': r.get('reference_price'),
+                'estimated_amount': r.get('estimated_amount'),
+                'gemini_reason': r.get('gemini_reason') or '',
+                'gemini_rank': int(r.get('gemini_rank') or 0),
+                'safety_filter_passed': bool(r.get('safety_filter_passed', True)),
+                'execution_status': str(r.get('execution_status') or 'PENDING')[:20],
+                'execution_result': json.dumps(r.get('execution_result') or {}, ensure_ascii=False),
+            })
+
+        session = self.session_factory()
+        try:
+            session.execute(
+                text("DELETE FROM trade_execution_plan WHERE user_id = :u AND execution_date = :d"),
+                {'u': user_id, 'd': execution_date}
+            )
+            session.execute(insert_sql, params)
+            session.commit()
+            logger.info(f"Saved {len(params)} trade_execution_plan rows for user {user_id}")
+            return len(params)
+        except SQLAlchemyError as e:
+            session.rollback()
+            logger.error(f"Error saving trade_execution_plan for user {user_id}: {e}")
+            return 0
+        finally:
+            session.close()
