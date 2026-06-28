@@ -65,6 +65,11 @@ databaseChangeLog:
       file: classpath:db/changelog/mvp/v1.11-kis-account-hts-id.yaml
       context: mvp
 
+  # Phase 13: Per-user execution records (multi-user pipeline)
+  - include:
+      file: classpath:db/changelog/mvp/v1.12-trade-execution-user.yaml
+      context: mvp
+
   # ========================================
   # Product Context Changelogs (Future)
   # ========================================
