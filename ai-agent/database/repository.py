@@ -906,12 +906,12 @@ class DatabaseRepository:
             INSERT INTO trade_execution_plan
                 (user_id, execution_date, stock_code, stock_name, trade_type,
                  planned_quantity, reference_price, estimated_amount, gemini_reason,
-                 gemini_rank, safety_filter_passed, execution_status, executed_at,
+                 gemini_rank, safety_filter_passed, execution_status, order_no, executed_at,
                  execution_result)
             VALUES
                 (:user_id, :execution_date, :stock_code, :stock_name, :trade_type,
                  :planned_quantity, :reference_price, :estimated_amount, :gemini_reason,
-                 :gemini_rank, :safety_filter_passed, :execution_status, now(),
+                 :gemini_rank, :safety_filter_passed, :execution_status, :order_no, now(),
                  CAST(:execution_result AS JSONB))
         """)
 
@@ -930,6 +930,7 @@ class DatabaseRepository:
                 'gemini_rank': int(r.get('gemini_rank') or 0),
                 'safety_filter_passed': bool(r.get('safety_filter_passed', True)),
                 'execution_status': str(r.get('execution_status') or 'PENDING')[:20],
+                'order_no': (str(r.get('order_no'))[:30] if r.get('order_no') else None),
                 'execution_result': json.dumps(r.get('execution_result') or {}, ensure_ascii=False),
             })
 

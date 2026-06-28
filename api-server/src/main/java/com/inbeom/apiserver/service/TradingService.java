@@ -11,6 +11,7 @@ import com.inbeom.apiserver.dto.trade.PendingOrderResponse;
 import com.inbeom.apiserver.dto.trade.RecentTradeResponse;
 import com.inbeom.apiserver.dto.trade.TradeHistoryResponse;
 import com.inbeom.apiserver.exception.UserNotFoundException;
+import com.inbeom.apiserver.repository.TradeExecutionPlanRepository;
 import com.inbeom.apiserver.repository.TradeHistoryRepository;
 import com.inbeom.apiserver.repository.UserRepository;
 import com.inbeom.apiserver.service.KisAuthService.KisCredentials;
@@ -28,6 +29,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -39,6 +41,7 @@ public class TradingService {
     private final KisApiClient kisApiClient;
     private final UserRepository userRepository;
     private final TradeHistoryRepository tradeHistoryRepository;
+    private final TradeExecutionPlanRepository tradeExecutionPlanRepository;
 
     /**
      * 홈 알림용 최근 거래내역 (DB trade_history 기반, 최신순 최대 8건).
@@ -188,8 +191,23 @@ public class TradingService {
             return new ArrayList<>();
         }
 
+        // 봇(AI) 자동매매 주문번호(ODNO) 집합 — 거래내역에 AI 매매 배지를 달기 위한 매칭.
+        // DB 조회 실패는 비핵심이므로 빈 집합으로 degrade(거래내역 자체는 정상 반환).
+        Set<String> aiOrderNos;
+        try {
+            aiOrderNos = tradeExecutionPlanRepository.findExecutedOrderNos(userId);
+        } catch (Exception e) {
+            log.warn("Failed to load AI order numbers for userId={}: {}", userId, e.getMessage());
+            aiOrderNos = java.util.Collections.emptySet();
+        }
+        final Set<String> aiSet = aiOrderNos;
+
         return response.getBody().getOutput1().stream()
                 .map(this::mapToTradeHistoryResponse)
+                .map(t -> {
+                    t.setAiTraded(aiSet.contains(t.getId()));
+                    return t;
+                })
                 .collect(Collectors.toList());
     }
 

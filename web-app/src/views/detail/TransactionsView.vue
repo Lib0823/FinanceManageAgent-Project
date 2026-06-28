@@ -43,6 +43,7 @@ const loadHistory = async () => {
         date: new Date(trade.orderedAt).toLocaleDateString('ko-KR'),
         time: new Date(trade.orderedAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }),
         status: trade.orderStatus,  // PENDING, COMPLETED 등
+        aiTraded: trade.aiTraded || false,  // AI(봇) 자동매매 주문 여부
         currency: '원'
       }))
 
@@ -253,7 +254,10 @@ const getTypeLabel = (type) => {
         <div class="history-list">
           <div v-for="(item, idx) in filteredHistory" :key="idx" class="history-item">
             <span :class="['history-type', item.type]">{{ getTypeLabel(item.type) }}</span>
-            <span class="history-name">{{ item.name || item.label }}</span>
+            <span class="history-name">
+              {{ item.name || item.label }}
+              <span v-if="item.aiTraded" class="ai-badge">🤖 AI</span>
+            </span>
             <span class="history-amount">{{ formatNumber(item.amount) }}{{ item.currency }}</span>
           </div>
           <p v-if="filteredHistory.length === 0" class="empty-submessage">
@@ -701,6 +705,18 @@ const getTypeLabel = (type) => {
   flex: 1;
   font-size: var(--font-size-sm);
   color: var(--color-text-primary);
+}
+
+.ai-badge {
+  margin-left: 6px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: var(--font-weight-medium);
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.25) 0%, rgba(124, 58, 237, 0.25) 100%);
+  color: #C4B5FD;
+  border: 1px solid rgba(139, 92, 246, 0.4);
+  white-space: nowrap;
 }
 
 .history-amount {

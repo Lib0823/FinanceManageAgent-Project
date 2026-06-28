@@ -668,6 +668,12 @@ class PipelineOrchestrator:
     def _build_execution_records(buy_orders: List[Dict], sell_orders: List[Dict], exec_result: Dict) -> List[Dict]:
         """유저별 buy/sell 주문 + 실행결과 → trade_execution_plan 레코드 리스트."""
         records: List[Dict] = []
+
+        def _odno(result: Dict):
+            """KIS 주문 응답에서 주문번호(ODNO) 추출. 실패 시 None."""
+            data = (result or {}).get('data') or {}
+            output = data.get('output') or {}
+            return output.get('ODNO') or output.get('odno')
         buy_res = {r['stock_code']: r.get('result', {}) for r in (exec_result.get('buy_results') or [])}
         for i, o in enumerate(buy_orders, 1):
             res = buy_res.get(o['stock_code'], {})
@@ -684,6 +690,7 @@ class PipelineOrchestrator:
                 'gemini_rank': i,
                 'safety_filter_passed': True,
                 'execution_status': 'EXECUTED' if res.get('success') else 'FAILED',
+                'order_no': _odno(res),
                 'execution_result': res,
             })
         sell_res = {r['stock_code']: r.get('result', {}) for r in (exec_result.get('sell_results') or [])}
@@ -700,6 +707,7 @@ class PipelineOrchestrator:
                 'gemini_rank': i,
                 'safety_filter_passed': True,
                 'execution_status': 'EXECUTED' if res.get('success') else 'FAILED',
+                'order_no': _odno(res),
                 'execution_result': res,
             })
         return records
