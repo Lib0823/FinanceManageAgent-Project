@@ -62,9 +62,11 @@ jwt:
   refresh-token-expiration: 86400000  # 24 hours (ms)
 
 # Internal service-to-service API (ai-agent → api-server, /internal/**).
-# X-Internal-Api-Key 헤더로 인증(InternalAuthFilter). 운영에서는 반드시 INTERNAL_API_KEY 로 override.
+# X-Internal-Api-Key 헤더로 인증(InternalAuthFilter). 기본값을 두지 않는다(빈 값):
+# INTERNAL_API_KEY 미설정 시 내부 채널은 fail-closed 로 전부 차단되어, 약한 기본 시크릿이
+# 저장소에 노출되는 것을 방지한다. 운영/도커/로컬 모두 INTERNAL_API_KEY 를 주입해야 한다.
 internal:
-  api-key: ${INTERNAL_API_KEY:financemanage-internal-service-key-change-in-production}
+  api-key: ${INTERNAL_API_KEY:}
 
 # Jasypt Configuration (Updated to secure algorithm)
 jasypt:
