@@ -614,8 +614,9 @@ class PipelineOrchestrator:
                 if price <= 0:
                     continue
                 max_q = int(b.get('max_quantity') or 0)  # order_amount 기반 상한
-                cash_q = int(cash / price) if cash > 0 else max_q
-                qty = min(max_q, cash_q) if cash > 0 else max_q
+                cash_q = int(cash / price)               # 가용 현금 기반 상한
+                # 둘 중 작은 값. 현금 0/조회 실패 시 cash_q<=0 → qty<=0 → 매수 안 함(안전).
+                qty = min(max_q, cash_q)
                 if qty <= 0:
                     continue
                 cash -= qty * price
