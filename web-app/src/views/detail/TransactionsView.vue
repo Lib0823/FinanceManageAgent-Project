@@ -1,9 +1,9 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AppHeader from '@/components/common/AppHeader.vue'
 import InvestmentTabs from '@/components/common/InvestmentTabs.vue'
-import { tradingApi } from '@/services/api'
+import { tradingApi, overseasApi } from '@/services/api'
 
 const router = useRouter()
 
@@ -21,10 +21,59 @@ const orders = ref({
 })
 
 // Load trade history
+// 해외(US) 탭 여부 + KIS 일시(yyyyMMddHHmmss) 파서
+const isOverseas = computed(() => tabs.value.sub === 'overseas')
+const parseKisDateTime = (s) => {
+  if (!s || s.length < 8) return new Date(NaN)
+  const y = +s.slice(0, 4), mo = +s.slice(4, 6) - 1, d = +s.slice(6, 8)
+  const h = +(s.slice(8, 10) || 0), mi = +(s.slice(10, 12) || 0), se = +(s.slice(12, 14) || 0)
+  return new Date(y, mo, d, h, mi, se)
+}
+
 const loadHistory = async () => {
   try {
     loading.value = true
     errorMessage.value = ''
+
+    // 해외(US): 체결내역 + 미체결을 overseasApi 로 조회 (USD)
+    if (isOverseas.value) {
+      const [hRes, pRes] = await Promise.all([
+        overseasApi.getHistory(undefined),
+        overseasApi.getPendingOrders(undefined)
+      ])
+      const hList = Array.isArray(hRes?.data?.list) ? hRes.data.list : []
+      history.value = hList.map((t) => {
+        const at = parseKisDateTime(t.executedAt)
+        const qty = Number(t.qty) || 0
+        const price = Number(t.price) || 0
+        return {
+          id: t.orderNo,
+          symbol: t.symbol,
+          name: t.name,
+          type: (t.side || '').toUpperCase() === 'SELL' ? 'sell' : 'buy',
+          quantity: qty,
+          price,
+          amount: price * qty,
+          orderedAt: at,
+          date: at.toLocaleDateString('ko-KR'),
+          time: at.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }),
+          status: 'COMPLETED',  // 체결내역(inquire-ccnl)은 체결 완료분
+          currency: '$'
+        }
+      })
+      const pList = Array.isArray(pRes?.data?.list) ? pRes.data.list : []
+      orders.value.pending = pList.map((o) => ({
+        type: (o.side || '').toUpperCase() === 'SELL' ? 'sell' : 'buy',
+        name: o.name || o.symbol || '',
+        symbol: o.symbol || '',
+        price: Number(o.orderPrice ?? o.price) || 0,
+        status: 'PENDING',
+        currency: '$'
+      }))
+      orders.value.reserved = []
+      return
+    }
+
     // 거래내역(KIS 3개월 체결조회)은 시세보다 느려 전역 10s 로는 부족 → 25s.
     const response = await tradingApi.getHistory({ timeout: 25000 })
 
@@ -74,6 +123,11 @@ const loadHistory = async () => {
 
 // 컴포넌트 마운트 시 데이터 로드
 onMounted(() => {
+  loadHistory()
+})
+
+// 국내/해외 탭 전환 시 데이터 소스 전환 재로드
+watch(() => tabs.value.sub, () => {
   loadHistory()
 })
 

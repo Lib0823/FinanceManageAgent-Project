@@ -149,7 +149,13 @@ export const stockApi = {
 export const overseasApi = {
   getPrice: (symbol, exchange) =>
     api.get(`/overseas/stocks/${symbol}/price`, { params: { exchange } }),
+  getOrderbook: (symbol, exchange) =>
+    api.get(`/overseas/stocks/${symbol}/orderbook`, { params: { exchange } }),
   getBalance: () => api.get('/overseas/balance'),
+  getHistory: (exchange) => api.get('/overseas/history', { params: { exchange } }),
+  getPendingOrders: (exchange) => api.get('/overseas/pending-orders', { params: { exchange } }),
+  getOrderable: (symbol, exchange, price) =>
+    api.get('/overseas/orderable', { params: { symbol, exchange, price } }),
   buy: (order) => api.post('/overseas/buy', order),
   sell: (order) => api.post('/overseas/sell', order)
 }

@@ -239,10 +239,11 @@ const loadExchangeRate = async () => {
 }
 
 const loadOrderbook = async () => {
-  // 해외 호가 미지원 → 호출 자체 생략
-  if (isOverseas.value) return
   try {
-    const response = await stockApi.getOrderbook(symbol.value)
+    // 국내는 10호가(stockApi), 해외(US)는 1호가(overseasApi). 응답 shape 동일(asks/bids={price,quantity}).
+    const response = isOverseas.value
+      ? await overseasApi.getOrderbook(symbol.value, exchange.value)
+      : await stockApi.getOrderbook(symbol.value)
     const data = response?.data || {}
     const asks = Array.isArray(data.asks) ? data.asks.filter((r) => r && r.price) : []
     const bids = Array.isArray(data.bids) ? data.bids.filter((r) => r && r.price) : []
@@ -266,19 +267,21 @@ const loadOrderbook = async () => {
 }
 
 const loadOrderable = async () => {
-  // 해외는 주문가능 조회 미지원
-  if (isOverseas.value) return
   try {
     const price = Number(orderForm.value.price) || Number(currentPrice.value) || 0
-    const response = await tradingApi.getOrderable(symbol.value, price)
+    const response = isOverseas.value
+      ? await overseasApi.getOrderable(symbol.value, exchange.value, price)
+      : await tradingApi.getOrderable(symbol.value, price)
     const data = response?.data || {}
     if (data.notice) {
       orderableNotice.value = data.notice
       return
     }
     orderableNotice.value = null
-    if (data.maxBuyQuantity != null) {
-      orderForm.value.maxQuantity = Number(data.maxBuyQuantity)
+    // 국내: maxBuyQuantity, 해외: maxBuyQty
+    const maxQty = data.maxBuyQuantity ?? data.maxBuyQty
+    if (maxQty != null) {
+      orderForm.value.maxQuantity = Number(maxQty)
     }
     if (data.orderableCash != null) {
       orderForm.value.maxPrice = Number(data.orderableCash)
@@ -299,7 +302,7 @@ const setMaxQuantity = (event) => {
 const loadMarketData = async () => {
   await loadPrice()
   if (isOverseas.value) {
-    await loadExchangeRate()
+    await Promise.all([loadExchangeRate(), loadOrderbook(), loadOrderable()])
   } else {
     await Promise.all([loadOrderbook(), loadOrderable()])
   }
@@ -456,9 +459,20 @@ const placeOverseasOrder = async () => {
 const pendingOrders = ref([])
 
 const loadPendingOrders = async () => {
-  // 해외 미체결 조회는 MVP 제외
-  if (isOverseas.value) return
   try {
+    if (isOverseas.value) {
+      // 해외: { list:[{orderNo,symbol,name,side,orderPrice}], notice }
+      const response = await overseasApi.getPendingOrders(exchange.value)
+      const list = Array.isArray(response?.data?.list) ? response.data.list : []
+      pendingOrders.value = list.map((order) => ({
+        type: (order.side || '').toUpperCase() === 'SELL' ? 'sell' : 'buy',
+        name: order.name || order.symbol || '',
+        symbol: order.symbol || '',
+        price: Number(order.orderPrice ?? order.price) || 0,
+        currency: '$'
+      }))
+      return
+    }
     const response = await tradingApi.getPendingOrders()
     const list = Array.isArray(response?.data) ? response.data : []
     pendingOrders.value = list.map((order) => ({
