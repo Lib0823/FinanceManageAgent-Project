@@ -15,7 +15,7 @@
 | ❌ UI만 | 4 | SplashView, WelcomeView, NewsView, NewsDetailView |
 
 > TradingView는 매수/매도 + 미체결 + 실시간 호가 + 주문가능 수량/금액까지 실데이터. 예약주문만 추후 지원.
-> **해외주식(US) 지원**: AssetDetailView 해외탭, SearchView 해외, TradingView 미국 지정가 매매까지 실데이터 연동. **해외 호가·실시간 시세·미국 외 타국가 시장은 미지원**(현재가는 real quote 도메인 사용). 코인은 비활성 유지.
+> **해외주식(US) 국내 수준 동등화 완료**: 매수/매도·잔고·현재가·검색 + 거래내역(`/overseas/history`)·미체결(`/overseas/pending-orders`)·주문가능(`/overseas/orderable`)·**1호가**(`/overseas/stocks/{symbol}/orderbook`, HHDFS76200100)·실시간 체결가(HDFSCNT0)·**실시간 체결통보**(H0GSCNI0, fills 플래그 뒤)까지. **구조적 미지원: 미국 외 타국가, 10호가 depth(KIS가 미국은 1호가만 제공).** 코인 비활성 유지.
 > 전 화면 공통: 코인·예약주문·뉴스는 **추후 지원/제외**(실데이터 없음, 빈 데이터/라벨 처리, mock 주입 금지). 송금은 화면 자체 제거.
 
 ---
@@ -73,7 +73,7 @@
 화면을 마저 붙이려면 **api-server에 엔드포인트부터** 있어야 하는 것들:
 
 - **뉴스** (`/news/*`) — NewsView, NewsDetailView, HomeView 뉴스 일부
-- **해외주식(US)** — 표시/검색/매매 구현됨(`/overseas/*`, `/stocks/search?market=`). 단 해외 호가·실시간 시세·미국 외 타국가 시장은 미지원
+- **해외주식(US)** — **국내 수준 동등화 완료**(표시·검색·매매·거래내역·미체결·주문가능·1호가·실시간 체결가/체결통보). 구조적 미지원: 미국 외 타국가, 10호가 depth(KIS 미국 1호가만 제공)
 - **코인** — 비활성 유지(실데이터 없이 빈 데이터/라벨)
 - **해외지수 위젯(HomeView)** — 개별 종목과 별개로 여전히 mockData 폴백
 - **배당 수령·현금 입출금 내역** — KIS OpenAPI에 개인 ledger 전용 TR **없음**(공식 확인). 배당은 종목 기준 '배당일정'(HHKDB669102C0)만 존재 → 별도 '배당 캘린더' 기능으로만 가능, 거래내역 기타 금액으로는 불가
