@@ -3,7 +3,11 @@ package com.inbeom.apiserver.controller;
 import com.inbeom.apiserver.dto.common.ApiResponse;
 import com.inbeom.apiserver.dto.overseas.OverseasBalanceResponse;
 import com.inbeom.apiserver.dto.overseas.OverseasOrderRequest;
+import com.inbeom.apiserver.dto.overseas.OverseasOrderableResponse;
+import com.inbeom.apiserver.dto.overseas.OverseasOrderbookResponse;
+import com.inbeom.apiserver.dto.overseas.OverseasPendingOrderResponse;
 import com.inbeom.apiserver.dto.overseas.OverseasPriceResponse;
+import com.inbeom.apiserver.dto.overseas.OverseasTradeHistoryResponse;
 import com.inbeom.apiserver.service.OverseasQuoteService;
 import com.inbeom.apiserver.service.OverseasTradingService;
 import com.inbeom.apiserver.util.JwtTokenProvider;
@@ -13,6 +17,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
 import java.util.Map;
 
 /**
@@ -97,6 +102,77 @@ public class OverseasController {
         Map<String, Object> result = overseasTradingService.sell(userId, request);
         return ResponseEntity.ok(
                 ApiResponse.success("Overseas sell order processed", result)
+        );
+    }
+
+    /**
+     * GET /api/overseas/stocks/{symbol}/orderbook?exchange=NASD
+     * 해외주식 1호가 (공개). 미연동/실패 시 빈 호가 + notice.
+     */
+    @GetMapping("/stocks/{symbol}/orderbook")
+    public ResponseEntity<ApiResponse<OverseasOrderbookResponse>> getOrderbook(
+            @PathVariable("symbol") String symbol,
+            @RequestParam(value = "exchange", required = false) String exchange
+    ) {
+        OverseasOrderbookResponse orderbook = overseasQuoteService.getOverseasOrderbook(symbol, exchange);
+        return ResponseEntity.ok(
+                ApiResponse.success("Overseas orderbook retrieved", orderbook)
+        );
+    }
+
+    /**
+     * GET /api/overseas/history?exchange=NASD
+     * 해외주식 주문체결내역 (JWT). 미지원/실패 시 빈 목록 + notice.
+     */
+    @GetMapping("/history")
+    public ResponseEntity<ApiResponse<OverseasTradeHistoryResponse>> getHistory(
+            @RequestHeader("Authorization") String authHeader,
+            @RequestParam(value = "exchange", required = false) String exchange
+    ) {
+        String token = authHeader.substring(7);
+        Long userId = jwtTokenProvider.getUserIdFromToken(token);
+
+        OverseasTradeHistoryResponse history = overseasTradingService.getHistory(userId, exchange);
+        return ResponseEntity.ok(
+                ApiResponse.success("Overseas trade history retrieved", history)
+        );
+    }
+
+    /**
+     * GET /api/overseas/pending-orders?exchange=NASD
+     * 해외주식 미체결내역 (JWT). 미지원/실패 시 빈 목록 + notice.
+     */
+    @GetMapping("/pending-orders")
+    public ResponseEntity<ApiResponse<OverseasPendingOrderResponse>> getPendingOrders(
+            @RequestHeader("Authorization") String authHeader,
+            @RequestParam(value = "exchange", required = false) String exchange
+    ) {
+        String token = authHeader.substring(7);
+        Long userId = jwtTokenProvider.getUserIdFromToken(token);
+
+        OverseasPendingOrderResponse pending = overseasTradingService.getPendingOrders(userId, exchange);
+        return ResponseEntity.ok(
+                ApiResponse.success("Overseas pending orders retrieved", pending)
+        );
+    }
+
+    /**
+     * GET /api/overseas/orderable?symbol=AAPL&exchange=NASD&price=180.0
+     * 해외주식 매수가능금액 (JWT). 미지원/실패 시 0 + notice.
+     */
+    @GetMapping("/orderable")
+    public ResponseEntity<ApiResponse<OverseasOrderableResponse>> getOrderable(
+            @RequestHeader("Authorization") String authHeader,
+            @RequestParam("symbol") String symbol,
+            @RequestParam(value = "exchange", required = false) String exchange,
+            @RequestParam(value = "price", required = false) BigDecimal price
+    ) {
+        String token = authHeader.substring(7);
+        Long userId = jwtTokenProvider.getUserIdFromToken(token);
+
+        OverseasOrderableResponse orderable = overseasTradingService.getOrderable(userId, symbol, exchange, price);
+        return ResponseEntity.ok(
+                ApiResponse.success("Overseas orderable retrieved", orderable)
         );
     }
 }

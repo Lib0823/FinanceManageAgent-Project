@@ -1,6 +1,7 @@
 package com.inbeom.apiserver.service;
 
 import com.inbeom.apiserver.client.KisApiClient;
+import com.inbeom.apiserver.dto.overseas.OverseasOrderbookResponse;
 import com.inbeom.apiserver.dto.overseas.OverseasPriceResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -8,7 +9,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -44,6 +47,9 @@ public class OverseasQuoteService {
 
     private static final String PRICE_DETAIL_ENDPOINT = "/uapi/overseas-price/v1/quotations/price-detail";
     private static final String PRICE_DETAIL_TR_ID = "HHDFS76200200";
+
+    private static final String ASKING_PRICE_ENDPOINT = "/uapi/overseas-price/v1/quotations/inquire-asking-price";
+    private static final String ASKING_PRICE_TR_ID = "HHDFS76200100";
 
     /**
      * 해외주식 현재가상세 조회 (HHDFS76200200). 실전 시세 도메인 + 실전 quote 자격증명 사용.
@@ -134,6 +140,130 @@ public class OverseasQuoteService {
             log.warn("KIS overseas price-detail call failed for symbol={}: {}", symbol, e.getMessage());
             return degraded(symbol, ex, NOTICE_OVERSEAS_QUOTE_FAILED);
         }
+    }
+
+    /**
+     * 해외주식 1호가 조회 (HHDFS76200100). 실전 시세 도메인 + 실전 quote 자격증명 사용.
+     * 매수/매도 각 1단계만 제공(국내 10호가와 다름). 미연동/실패 시 빈 호가 + notice.
+     *
+     * @param symbol   종목코드 (예: AAPL)
+     * @param exchange 잔고/매매용 거래소코드(NASD/NYSE/AMEX). null/blank/미지원이면 NASD.
+     */
+    @SuppressWarnings("unchecked")
+    public OverseasOrderbookResponse getOverseasOrderbook(String symbol, String exchange) {
+        OverseasExchange ex = OverseasExchange.fromCode(exchange);
+
+        if (!kisQuoteService.isQuoteEnabled()) {
+            return degradedOrderbook(symbol, ex, NOTICE_OVERSEAS_QUOTE);
+        }
+        String token = kisQuoteService.getQuoteAccessToken();
+        if (token == null) {
+            return degradedOrderbook(symbol, ex, NOTICE_OVERSEAS_QUOTE);
+        }
+
+        try {
+            Map<String, String> params = new HashMap<>();
+            params.put("AUTH", "");
+            params.put("EXCD", ex.quoteCode());
+            params.put("SYMB", symbol);
+
+            ResponseEntity<Map> response = kisApiClient.get(
+                    kisQuoteService.getQuoteBaseUrl(),
+                    ASKING_PRICE_ENDPOINT,
+                    ASKING_PRICE_TR_ID,
+                    token,
+                    kisQuoteService.getQuoteAppKey(),
+                    kisQuoteService.getQuoteAppSecret(),
+                    params,
+                    Map.class
+            );
+
+            Map<String, Object> body = response.getBody();
+            if (!isRtOk(body)) {
+                log.warn("KIS overseas asking-price rt_cd!=0 for symbol={} excd={}: {}",
+                        symbol, ex.quoteCode(), body != null ? body.get("msg1") : "null body");
+                return degradedOrderbook(symbol, ex, NOTICE_OVERSEAS_QUOTE_FAILED);
+            }
+
+            // 1호가 필드는 응답 output 위치가 구현/문서마다 다를 수 있어 output1/output2/output 순으로 탐색.
+            Map<String, Object> out = firstOutputWith(body, "pask1", "pbid1");
+            if (out == null) {
+                log.warn("KIS overseas asking-price missing 1호가 output for symbol={}", symbol);
+                return degradedOrderbook(symbol, ex, NOTICE_OVERSEAS_QUOTE_FAILED);
+            }
+
+            BigDecimal askPrice = parseBigDecimal(asString(out.get("pask1")));
+            BigDecimal bidPrice = parseBigDecimal(asString(out.get("pbid1")));
+            Integer askQty = parseInt(asString(out.get("vask1")));
+            Integer bidQty = parseInt(asString(out.get("vbid1")));
+
+            List<OverseasOrderbookResponse.OrderbookLevel> asks = new ArrayList<>();
+            List<OverseasOrderbookResponse.OrderbookLevel> bids = new ArrayList<>();
+            if (askPrice != null) {
+                asks.add(OverseasOrderbookResponse.OrderbookLevel.builder()
+                        .price(askPrice).quantity(askQty != null ? askQty : 0).build());
+            }
+            if (bidPrice != null) {
+                bids.add(OverseasOrderbookResponse.OrderbookLevel.builder()
+                        .price(bidPrice).quantity(bidQty != null ? bidQty : 0).build());
+            }
+            if (asks.isEmpty() && bids.isEmpty()) {
+                return degradedOrderbook(symbol, ex, NOTICE_OVERSEAS_QUOTE_FAILED);
+            }
+
+            return OverseasOrderbookResponse.builder()
+                    .symbol(symbol)
+                    .exchange(ex.balanceCode())
+                    .currency(ex.currency())
+                    .asks(asks)
+                    .bids(bids)
+                    .notice(null)
+                    .build();
+        } catch (Exception e) {
+            log.warn("KIS overseas asking-price call failed for symbol={}: {}", symbol, e.getMessage());
+            return degradedOrderbook(symbol, ex, NOTICE_OVERSEAS_QUOTE_FAILED);
+        }
+    }
+
+    private OverseasOrderbookResponse degradedOrderbook(String symbol, OverseasExchange ex, String notice) {
+        return OverseasOrderbookResponse.builder()
+                .symbol(symbol)
+                .exchange(ex.balanceCode())
+                .currency(ex.currency())
+                .asks(new ArrayList<>())
+                .bids(new ArrayList<>())
+                .notice(notice)
+                .build();
+    }
+
+    /** body 의 output1/output2/output 중 지정 키들을 모두 가진 첫 Map 을 반환. 없으면 null. */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> firstOutputWith(Map<String, Object> body, String... keys) {
+        if (body == null) {
+            return null;
+        }
+        for (String name : new String[]{"output1", "output2", "output"}) {
+            Object o = body.get(name);
+            if (o instanceof Map) {
+                Map<String, Object> m = (Map<String, Object>) o;
+                boolean hasAny = false;
+                for (String k : keys) {
+                    if (m.get(k) != null) {
+                        hasAny = true;
+                        break;
+                    }
+                }
+                if (hasAny) {
+                    return m;
+                }
+            }
+        }
+        return null;
+    }
+
+    private Integer parseInt(String value) {
+        BigDecimal d = parseBigDecimal(value);
+        return d != null ? d.intValue() : null;
     }
 
     private OverseasPriceResponse degraded(String symbol, OverseasExchange ex, String notice) {

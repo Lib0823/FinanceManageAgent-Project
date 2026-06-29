@@ -4,6 +4,9 @@ import com.inbeom.apiserver.client.KisApiClient;
 import com.inbeom.apiserver.domain.User;
 import com.inbeom.apiserver.dto.overseas.OverseasBalanceResponse;
 import com.inbeom.apiserver.dto.overseas.OverseasOrderRequest;
+import com.inbeom.apiserver.dto.overseas.OverseasOrderableResponse;
+import com.inbeom.apiserver.dto.overseas.OverseasPendingOrderResponse;
+import com.inbeom.apiserver.dto.overseas.OverseasTradeHistoryResponse;
 import com.inbeom.apiserver.repository.UserRepository;
 import com.inbeom.apiserver.service.KisAuthService.KisCredentials;
 import lombok.RequiredArgsConstructor;
@@ -12,6 +15,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -38,15 +43,32 @@ public class OverseasTradingService {
     private final UserRepository userRepository;
 
     // 해외 TR (모의 V변형 — convertTrId 미적용 대상이므로 상수로 직접 확정)
+    // ─── MUST-VERIFY (라이브 모의계좌+장중에서만 확정 가능) ───
+    // 모의 V변형 TR명: kis_os.py 기준 실전 TTTS****R → 모의 VTTS****R 동일 suffix.
+    // 모의 inquire-nccs/inquire-ccnl 지원 여부 및 응답 필드명은 실응답 확인 필요.
     private static final String TR_BALANCE = "VTTS3012R";   // 해외주식 잔고 (모의)
     private static final String TR_BUY = "VTTT1002U";       // 미국 매수 주문 (모의)
     private static final String TR_SELL = "VTTT1006U";      // 미국 매도 주문 (모의)
+    private static final String TR_HISTORY = "VTTS3035R";   // 해외 체결내역(거래내역) (모의) — MUST-VERIFY
+    private static final String TR_PENDING = "VTTS3018R";   // 해외 미체결 (모의) — MUST-VERIFY
+    private static final String TR_ORDERABLE = "VTTS3007R"; // 해외 매수가능 (모의) — MUST-VERIFY
 
     private static final String BALANCE_ENDPOINT = "/uapi/overseas-stock/v1/trading/inquire-balance";
     private static final String ORDER_ENDPOINT = "/uapi/overseas-stock/v1/trading/order";
+    private static final String HISTORY_ENDPOINT = "/uapi/overseas-stock/v1/trading/inquire-ccnl";
+    private static final String PENDING_ENDPOINT = "/uapi/overseas-stock/v1/trading/inquire-nccs";
+    private static final String ORDERABLE_ENDPOINT = "/uapi/overseas-stock/v1/trading/inquire-psamount";
+
+    // 모의 inquire-ccnl/inquire-nccs 는 전체("00")만 지원(모의 제약). 거래내역 기본 조회기간 90일.
+    private static final String DVSN_ALL = "00";
+    private static final int HISTORY_LOOKBACK_DAYS = 90;
+    private static final DateTimeFormatter YYYYMMDD = DateTimeFormatter.ofPattern("yyyyMMdd");
 
     private static final String NOTICE_BALANCE_FAILED = "해외 잔고를 불러오지 못했습니다";
     private static final String NOTICE_ORDER_FAILED = "해외 주문에 실패했습니다 (모의투자 해외매매 미지원일 수 있습니다)";
+    private static final String NOTICE_HISTORY_FAILED = "해외 거래내역을 불러오지 못했습니다 (모의투자 미지원일 수 있습니다)";
+    private static final String NOTICE_PENDING_FAILED = "해외 미체결 내역을 불러오지 못했습니다 (모의투자 미지원일 수 있습니다)";
+    private static final String NOTICE_ORDERABLE_FAILED = "해외 매수가능 금액을 불러오지 못했습니다 (모의투자 미지원일 수 있습니다)";
 
     /**
      * 해외주식 잔고 조회 (VTTS3012R, 모의). 미국 3거래소(NASD/NYSE/AMEX)를 순회하며 보유종목을 합산한다.
@@ -152,6 +174,245 @@ public class OverseasTradingService {
         } catch (Exception e) {
             log.warn("Overseas balance failed for userId={}: {}", userId, e.getMessage());
             return emptyBalance(NOTICE_BALANCE_FAILED);
+        }
+    }
+
+    /**
+     * 해외주식 체결내역(거래내역) 조회 (VTTS3035R, 모의, inquire-ccnl). 사용자 mock 키.
+     * 조회기간은 최근 90일(ORD_STRT_DT~ORD_END_DT), 매도매수/체결구분은 모의 제약상 전체("00").
+     * 미지원/실패/예외 시 빈 목록 + notice 로 degrade(예외 전파 금지).
+     */
+    @SuppressWarnings("unchecked")
+    public OverseasTradeHistoryResponse getHistory(Long userId, String exchange) {
+        try {
+            User user = userRepository.findById(userId).orElse(null);
+            if (user == null || user.getKisAccount() == null) {
+                log.warn("Overseas history: no KIS account for userId={}", userId);
+                return emptyHistory(NOTICE_HISTORY_FAILED);
+            }
+
+            OverseasExchange ex = OverseasExchange.fromCode(exchange);
+            Long kisAccountId = user.getKisAccount().getId();
+            String kisToken = kisAuthService.getKisAccessToken(kisAccountId);
+            KisCredentials credentials = kisAuthService.getKisCredentials(kisAccountId);
+
+            LocalDate today = LocalDate.now();
+            Map<String, String> queryParams = new LinkedHashMap<>();
+            queryParams.put("CANO", credentials.accountNumber());
+            queryParams.put("ACNT_PRDT_CD", credentials.accountProductCode());
+            queryParams.put("PDNO", "");
+            queryParams.put("ORD_STRT_DT", today.minusDays(HISTORY_LOOKBACK_DAYS).format(YYYYMMDD));
+            queryParams.put("ORD_END_DT", today.format(YYYYMMDD));
+            queryParams.put("SLL_BUY_DVSN", DVSN_ALL);    // 모의: 전체만
+            queryParams.put("CCLD_NCCS_DVSN", DVSN_ALL);  // 모의: 전체만
+            queryParams.put("OVRS_EXCG_CD", ex.balanceCode());
+            queryParams.put("SORT_SQN", "");
+            queryParams.put("ORD_DT", "");
+            queryParams.put("ORD_GNO_BRNO", "");
+            queryParams.put("ODNO", "");
+            queryParams.put("CTX_AREA_FK200", "");
+            queryParams.put("CTX_AREA_NK200", "");
+
+            Map<String, Object> body;
+            try {
+                ResponseEntity<Map> response = kisApiClient.get(
+                        HISTORY_ENDPOINT,
+                        TR_HISTORY,
+                        kisToken,
+                        credentials.appKey(),
+                        credentials.appSecret(),
+                        queryParams,
+                        Map.class
+                );
+                body = response.getBody();
+            } catch (Exception e) {
+                log.warn("Overseas history call failed for userId={} excd={}: {}",
+                        userId, ex.balanceCode(), e.getMessage());
+                return emptyHistory(NOTICE_HISTORY_FAILED);
+            }
+
+            if (!isRtOk(body)) {
+                log.warn("Overseas history rt_cd!=0 for userId={} excd={}: {}",
+                        userId, ex.balanceCode(), body != null ? body.get("msg1") : "null body");
+                return emptyHistory(NOTICE_HISTORY_FAILED);
+            }
+
+            List<OverseasTradeHistoryResponse.OverseasTradeHistoryItem> items = new ArrayList<>();
+            Object output = body.get("output");
+            // output 키는 응답에 따라 output1/output 둘 다 가능 → 둘 다 시도(MUST-VERIFY).
+            if (!(output instanceof List)) {
+                output = body.get("output1");
+            }
+            if (output instanceof List) {
+                for (Object row : (List<Object>) output) {
+                    if (!(row instanceof Map)) {
+                        continue;
+                    }
+                    items.add(mapHistoryItem((Map<String, Object>) row));
+                }
+            }
+
+            return OverseasTradeHistoryResponse.builder()
+                    .list(items)
+                    .currency("USD")
+                    .notice(null)
+                    .build();
+        } catch (Exception e) {
+            log.warn("Overseas history failed for userId={}: {}", userId, e.getMessage());
+            return emptyHistory(NOTICE_HISTORY_FAILED);
+        }
+    }
+
+    /**
+     * 해외주식 미체결 조회 (VTTS3018R, 모의, inquire-nccs). 사용자 mock 키.
+     * 미지원/실패/예외 시 빈 목록 + notice 로 degrade(예외 전파 금지).
+     */
+    @SuppressWarnings("unchecked")
+    public OverseasPendingOrderResponse getPendingOrders(Long userId, String exchange) {
+        try {
+            User user = userRepository.findById(userId).orElse(null);
+            if (user == null || user.getKisAccount() == null) {
+                log.warn("Overseas pending-orders: no KIS account for userId={}", userId);
+                return emptyPending(NOTICE_PENDING_FAILED);
+            }
+
+            OverseasExchange ex = OverseasExchange.fromCode(exchange);
+            Long kisAccountId = user.getKisAccount().getId();
+            String kisToken = kisAuthService.getKisAccessToken(kisAccountId);
+            KisCredentials credentials = kisAuthService.getKisCredentials(kisAccountId);
+
+            Map<String, String> queryParams = new LinkedHashMap<>();
+            queryParams.put("CANO", credentials.accountNumber());
+            queryParams.put("ACNT_PRDT_CD", credentials.accountProductCode());
+            queryParams.put("OVRS_EXCG_CD", ex.balanceCode());
+            queryParams.put("SORT_SQN", "");
+            queryParams.put("CTX_AREA_FK200", "");
+            queryParams.put("CTX_AREA_NK200", "");
+
+            Map<String, Object> body;
+            try {
+                ResponseEntity<Map> response = kisApiClient.get(
+                        PENDING_ENDPOINT,
+                        TR_PENDING,
+                        kisToken,
+                        credentials.appKey(),
+                        credentials.appSecret(),
+                        queryParams,
+                        Map.class
+                );
+                body = response.getBody();
+            } catch (Exception e) {
+                log.warn("Overseas pending-orders call failed for userId={} excd={}: {}",
+                        userId, ex.balanceCode(), e.getMessage());
+                return emptyPending(NOTICE_PENDING_FAILED);
+            }
+
+            if (!isRtOk(body)) {
+                log.warn("Overseas pending-orders rt_cd!=0 for userId={} excd={}: {}",
+                        userId, ex.balanceCode(), body != null ? body.get("msg1") : "null body");
+                return emptyPending(NOTICE_PENDING_FAILED);
+            }
+
+            List<OverseasPendingOrderResponse.OverseasPendingOrderItem> items = new ArrayList<>();
+            Object output = body.get("output");
+            if (!(output instanceof List)) {
+                output = body.get("output1");
+            }
+            if (output instanceof List) {
+                for (Object row : (List<Object>) output) {
+                    if (!(row instanceof Map)) {
+                        continue;
+                    }
+                    items.add(mapPendingItem((Map<String, Object>) row));
+                }
+            }
+
+            return OverseasPendingOrderResponse.builder()
+                    .list(items)
+                    .currency("USD")
+                    .notice(null)
+                    .build();
+        } catch (Exception e) {
+            log.warn("Overseas pending-orders failed for userId={}: {}", userId, e.getMessage());
+            return emptyPending(NOTICE_PENDING_FAILED);
+        }
+    }
+
+    /**
+     * 해외주식 매수가능 조회 (VTTS3007R, 모의, inquire-psamount). 사용자 mock 키.
+     * price 는 OVRS_ORD_UNPR(지정단가) 로 전달한다. 미지원/실패/예외 시 0 + notice 로 degrade.
+     */
+    @SuppressWarnings("unchecked")
+    public OverseasOrderableResponse getOrderable(Long userId, String symbol, String exchange, BigDecimal price) {
+        OverseasExchange ex = OverseasExchange.fromCode(exchange);
+        try {
+            User user = userRepository.findById(userId).orElse(null);
+            if (user == null || user.getKisAccount() == null) {
+                log.warn("Overseas orderable: no KIS account for userId={}", userId);
+                return emptyOrderable(symbol, ex, NOTICE_ORDERABLE_FAILED);
+            }
+
+            Long kisAccountId = user.getKisAccount().getId();
+            String kisToken = kisAuthService.getKisAccessToken(kisAccountId);
+            KisCredentials credentials = kisAuthService.getKisCredentials(kisAccountId);
+
+            String unitPrice = (price != null && price.compareTo(BigDecimal.ZERO) > 0)
+                    ? price.toPlainString() : "0";
+
+            Map<String, String> queryParams = new LinkedHashMap<>();
+            queryParams.put("CANO", credentials.accountNumber());
+            queryParams.put("ACNT_PRDT_CD", credentials.accountProductCode());
+            queryParams.put("OVRS_EXCG_CD", ex.balanceCode());
+            queryParams.put("OVRS_ORD_UNPR", unitPrice);
+            queryParams.put("ITEM_CD", symbol);
+
+            Map<String, Object> body;
+            try {
+                ResponseEntity<Map> response = kisApiClient.get(
+                        ORDERABLE_ENDPOINT,
+                        TR_ORDERABLE,
+                        kisToken,
+                        credentials.appKey(),
+                        credentials.appSecret(),
+                        queryParams,
+                        Map.class
+                );
+                body = response.getBody();
+            } catch (Exception e) {
+                log.warn("Overseas orderable call failed for userId={} symbol={}: {}",
+                        userId, symbol, e.getMessage());
+                return emptyOrderable(symbol, ex, NOTICE_ORDERABLE_FAILED);
+            }
+
+            if (!isRtOk(body)) {
+                log.warn("Overseas orderable rt_cd!=0 for userId={} symbol={}: {}",
+                        userId, symbol, body != null ? body.get("msg1") : "null body");
+                return emptyOrderable(symbol, ex, NOTICE_ORDERABLE_FAILED);
+            }
+
+            Map<String, Object> out = firstMap(body.get("output"));
+            if (out == null) {
+                log.warn("Overseas orderable missing output for userId={} symbol={}", userId, symbol);
+                return emptyOrderable(symbol, ex, NOTICE_ORDERABLE_FAILED);
+            }
+
+            // 필드명 MUST-VERIFY: 최대주문가능수량/주문가능외화금액. 응답 변형 대비 후보 키 순회.
+            int maxQty = parseIntSafely(firstNonNull(out,
+                    "max_ord_psbl_qty", "ovrs_max_ord_psbl_qty", "ord_psbl_qty"));
+            BigDecimal cash = parseBigDecimalSafely(firstNonNull(out,
+                    "ord_psbl_frcr_amt", "frcr_ord_psbl_amt1", "ovrs_ord_psbl_amt"));
+
+            return OverseasOrderableResponse.builder()
+                    .symbol(symbol)
+                    .exchange(ex.balanceCode())
+                    .maxBuyQty(maxQty)
+                    .orderableCash(cash)
+                    .currency("USD")
+                    .notice(null)
+                    .build();
+        } catch (Exception e) {
+            log.warn("Overseas orderable failed for userId={} symbol={}: {}", userId, symbol, e.getMessage());
+            return emptyOrderable(symbol, ex, NOTICE_ORDERABLE_FAILED);
         }
     }
 
@@ -270,6 +531,108 @@ public class OverseasTradingService {
                 .currency("USD")
                 .notice(notice)
                 .build();
+    }
+
+    private OverseasTradeHistoryResponse emptyHistory(String notice) {
+        return OverseasTradeHistoryResponse.builder()
+                .list(new ArrayList<>())
+                .currency("USD")
+                .notice(notice)
+                .build();
+    }
+
+    private OverseasPendingOrderResponse emptyPending(String notice) {
+        return OverseasPendingOrderResponse.builder()
+                .list(new ArrayList<>())
+                .currency("USD")
+                .notice(notice)
+                .build();
+    }
+
+    private OverseasOrderableResponse emptyOrderable(String symbol, OverseasExchange ex, String notice) {
+        return OverseasOrderableResponse.builder()
+                .symbol(symbol)
+                .exchange(ex.balanceCode())
+                .maxBuyQty(0)
+                .orderableCash(BigDecimal.ZERO)
+                .currency("USD")
+                .notice(notice)
+                .build();
+    }
+
+    // 체결내역 필드명 MUST-VERIFY (모의 inquire-ccnl 실응답 기준 확정 필요).
+    private OverseasTradeHistoryResponse.OverseasTradeHistoryItem mapHistoryItem(Map<String, Object> item) {
+        String orderDate = firstNonNull(item, "ord_dt", "dmst_ord_dt");
+        String orderTime = firstNonNull(item, "ord_tmd", "ord_tm");
+        return OverseasTradeHistoryResponse.OverseasTradeHistoryItem.builder()
+                .symbol(firstNonNull(item, "pdno", "ovrs_pdno"))
+                .name(firstNonNull(item, "prdt_name", "ovrs_item_name"))
+                .side(mapSide(firstNonNull(item, "sll_buy_dvsn_cd", "sll_buy_dvsn_cd_name")))
+                .qty(parseIntSafely(firstNonNull(item, "ft_ccld_qty", "ccld_qty")))
+                .price(parseBigDecimalSafely(firstNonNull(item, "ft_ccld_unpr3", "ccld_unpr", "ft_ccld_unpr")))
+                .executedAt(joinDateTime(orderDate, orderTime))
+                .orderNo(firstNonNull(item, "odno"))
+                .status(firstNonNull(item, "prcs_stat_name", "rvse_cncl_dvsn_name", "sll_buy_dvsn_cd_name"))
+                .build();
+    }
+
+    // 미체결 필드명 MUST-VERIFY (모의 inquire-nccs 실응답 기준 확정 필요).
+    private OverseasPendingOrderResponse.OverseasPendingOrderItem mapPendingItem(Map<String, Object> item) {
+        String orderDate = firstNonNull(item, "ord_dt", "dmst_ord_dt");
+        String orderTime = firstNonNull(item, "ord_tmd", "ord_tm");
+        return OverseasPendingOrderResponse.OverseasPendingOrderItem.builder()
+                .orderNo(firstNonNull(item, "odno"))
+                .symbol(firstNonNull(item, "pdno", "ovrs_pdno"))
+                .name(firstNonNull(item, "prdt_name", "ovrs_item_name"))
+                .side(mapSide(firstNonNull(item, "sll_buy_dvsn_cd", "sll_buy_dvsn_cd_name")))
+                .orderQty(parseIntSafely(firstNonNull(item, "ft_ord_qty", "ord_qty")))
+                .remainQty(parseIntSafely(firstNonNull(item, "nccs_qty", "ord_psbl_qty")))
+                .orderPrice(parseBigDecimalSafely(firstNonNull(item, "ft_ord_unpr3", "ord_unpr", "ft_ord_unpr")))
+                .orderedAt(joinDateTime(orderDate, orderTime))
+                .build();
+    }
+
+    /**
+     * KIS 매도매수구분코드(01=매도, 02=매수) 또는 명칭을 BUY/SELL 로 정규화. 미상이면 원문 반환.
+     */
+    private String mapSide(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String s = raw.trim();
+        if ("02".equals(s) || s.contains("매수") || s.equalsIgnoreCase("BUY")) {
+            return "BUY";
+        }
+        if ("01".equals(s) || s.contains("매도") || s.equalsIgnoreCase("SELL")) {
+            return "SELL";
+        }
+        return s;
+    }
+
+    /**
+     * yyyyMMdd + HHmmss 를 yyyyMMddHHmmss 로 결합. 둘 중 하나라도 비면 가진 값만 반환.
+     */
+    private String joinDateTime(String date, String time) {
+        if (date == null) {
+            return time;
+        }
+        if (time == null) {
+            return date;
+        }
+        return date + time;
+    }
+
+    /**
+     * 후보 키들을 순서대로 조회해 첫 비어있지 않은 String 값을 반환(응답 필드명 변형 대비, MUST-VERIFY).
+     */
+    private String firstNonNull(Map<String, Object> item, String... keys) {
+        for (String key : keys) {
+            String v = asString(item.get(key));
+            if (v != null) {
+                return v;
+            }
+        }
+        return null;
     }
 
     private OverseasBalanceResponse.OverseasHolding mapHolding(Map<String, Object> item) {
