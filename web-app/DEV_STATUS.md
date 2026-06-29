@@ -10,8 +10,8 @@
 
 | 상태 | 개수 | 화면 |
 |------|------|------|
-| ⭕ 완료 | 15 | LoginView, RegisterFinanceView, ResetPasswordView, ProfileView, BotView, CompanyDetailView, MarketAnalysisView, AssetsView, SettingsView, SearchView, FavoritesView, AssetDetailView, TermsView, TradingView, TransactionsView |
-| 🔺 부분 | 2 | RegisterView, HomeView |
+| ⭕ 완료 | 16 | LoginView, RegisterFinanceView, ResetPasswordView, ProfileView, BotView, CompanyDetailView, MarketAnalysisView, AssetsView, SettingsView, SearchView, FavoritesView, AssetDetailView, TermsView, TradingView, TransactionsView, HomeView |
+| 🔺 부분 | 1 | RegisterView |
 | ❌ UI만 | 4 | SplashView, WelcomeView, NewsView, NewsDetailView |
 
 > TradingView는 매수/매도 + 미체결 + 실시간 호가 + 주문가능 수량/금액까지 실데이터. 예약주문만 추후 지원.
@@ -43,7 +43,7 @@
 
 | 화면 | 상태 | 메모 |
 |------|:----:|------|
-| HomeView | 🔺 | 알림(`/trading/recent`)·뉴스·AI추천은 실 API. **국내지수/환율은 API 호출하나 해외지수·코인은 mockData 폴백**(개별 미국 종목 매매/표시/검색은 `/overseas/*`·`/stocks/search?market=`로 실데이터, 해외지수 위젯은 별도) |
+| HomeView | ⭕ | 알림(`/trading/recent`)·뉴스·AI추천·**국내지수**(FHKUP03500100)·**해외지수**(다우/나스닥/S&P500, FHKST03030100)·환율 전부 실 API. 코인 지수만 mock(코인은 제외 대상) |
 | AssetsView | ⭕ | `assetApi.getBalance`/`getHoldings` 실 API로 자산요약 구성. mockAssetSummary 제거, `handleRefresh()`는 재로드. 채권·코인 카드는 "추후 지원"(금액 0), 7일 추이는 추세 엔드포인트 없어 숨김 |
 | BotView | ⭕ | 보유종목(`getHoldings`), AI분석(`getStockAnalysis` 병렬), 매매설정(`getTradeConfig`/`updateTradeConfig`) 전부 실 API |
 | SearchView | ⭕ | `stockApi.search`(종목 카탈로그) + `stockApi.getPrice`(항목별 시세) 실 API. mock 제거. 즐겨찾기 토글은 `favoriteApi.add/remove`. **해외(US) sub-tab 실데이터** — `market=` 파라미터로 미국 종목 검색 |
@@ -75,7 +75,7 @@
 - **뉴스** (`/news/*`) — NewsView, NewsDetailView, HomeView 뉴스 일부
 - **해외주식(US)** — **국내 수준 동등화 완료**(표시·검색·매매·거래내역·미체결·주문가능·1호가·실시간 체결가/체결통보). 구조적 미지원: 미국 외 타국가, 10호가 depth(KIS 미국 1호가만 제공)
 - **코인** — 비활성 유지(실데이터 없이 빈 데이터/라벨)
-- **해외지수 위젯(HomeView)** — 개별 종목과 별개로 여전히 mockData 폴백
+- ~~해외지수 위젯(HomeView)~~ — **해결됨**: 다우/나스닥/S&P500 실연동(`/market/indices` overseas, KIS FHKST03030100). 코인 지수만 mock(제외 대상)
 - **배당 수령·현금 입출금 내역** — KIS OpenAPI에 개인 ledger 전용 TR **없음**(공식 확인). 배당은 종목 기준 '배당일정'(HHKDB669102C0)만 존재 → 별도 '배당 캘린더' 기능으로만 가능, 거래내역 기타 금액으로는 불가
 - **실시간 시세 소켓 (호가/체결가)** — KIS WebSocket 브리지(`/ws/realtime`) **구현(Phase 1)**. 국내 `H0STASP0`(호가)/`H0STCNT0`(체결가), 미국 `HDFSASP0`/`HDFSCNT0`.
 - **실시간 체결통보 (Phase 2, 국내, 플래그 뒤)** — `H0STCNI0`/`H0STCNI9` **구현**(`kis.realtime.fills.enabled`). 유저당 KIS 연결(계좌키)·HTS ID(`tr_key`, `user_kis_accounts.hts_id`)·AES-CBC 복호, 체결 시 토스트 알림. 해외 `H0GSCNI0` 보류.
