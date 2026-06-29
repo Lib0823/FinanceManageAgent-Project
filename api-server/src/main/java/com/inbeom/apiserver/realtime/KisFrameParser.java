@@ -172,9 +172,9 @@ public class KisFrameParser {
                 String sym = usSymbol(f, UsAsking.SYMBOL, UsAsking.RSYM);
                 yield new ParseResult(trId, sym, parseUsAsking(f, sym), null);
             }
-            // 체결통보(KR_FILL)는 flag 1 암호 프레임 → 이미 위 encryptFlag 가드에서 걸러진다.
+            // 체결통보(KR_FILL/US_FILL)는 flag 1 암호 프레임 → 이미 위 encryptFlag 가드에서 걸러진다.
             // Phase 2 FillFrameParser 가 독립 처리하므로 본 평문 파서는 무시(null). switch 완전성용.
-            case KR_FILL -> null;
+            case KR_FILL, US_FILL -> null;
         };
     }
 
