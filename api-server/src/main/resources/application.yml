@@ -128,6 +128,16 @@ dart:
   api-key: ${DART_API_KEY:}
   base-url: https://opendart.fss.or.kr/api
 
+# WebAuthn / Passkey (생체 로그인) Configuration
+# - rp-id : 자격증명이 유효한 도메인. 프론트 origin 의 등록 가능한 부모 도메인이어야 함(로컬=localhost).
+# - rp-name : 인증기 UI 에 표시되는 서비스 이름.
+# - origins : 프론트 실행 origin 목록(콤마 구분). rp-id 와 정확히 일치해야 NotAllowedError 가 안 남.
+# 운영은 HTTPS 도메인으로 교체(WEBAUTHN_RP_ID / WEBAUTHN_ORIGINS).
+webauthn:
+  rp-id: ${WEBAUTHN_RP_ID:localhost}
+  rp-name: ${WEBAUTHN_RP_NAME:FinanceManage}
+  origins: ${WEBAUTHN_ORIGINS:http://localhost:5173}
+
 # CORS Configuration
 cors:
   allowed-origins:

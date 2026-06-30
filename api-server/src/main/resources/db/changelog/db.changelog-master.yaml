@@ -75,6 +75,11 @@ databaseChangeLog:
       file: classpath:db/changelog/mvp/v1.13-trade-execution-order-no.yaml
       context: mvp
 
+  # Phase 15: WebAuthn / Passkey credentials (biometric login)
+  - include:
+      file: classpath:db/changelog/mvp/v1.14-webauthn-credentials.yaml
+      context: mvp
+
   # ========================================
   # Product Context Changelogs (Future)
   # ========================================
