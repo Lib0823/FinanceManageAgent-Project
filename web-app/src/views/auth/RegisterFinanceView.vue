@@ -3,7 +3,8 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { authApi } from '@/services/api'
-import { Toast } from 'vant'
+import { Toast, Dialog } from 'vant'
+import { isPlatformAuthAvailable, registerBiometric } from '@/services/webauthn'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -116,6 +117,36 @@ const handleValidateKis = async () => {
   }
 }
 
+// 가입+자동로그인 직후, 기기가 지원하면 생체 로그인 등록을 권유한다.
+// 등록 실패/취소/미지원 어떤 경우에도 가입 완료 흐름을 막지 않는다(skip 허용).
+const promptBiometricEnrollment = async () => {
+  try {
+    const available = await isPlatformAuthAvailable()
+    if (!available) {
+      return
+    }
+
+    await Dialog.confirm({
+      title: '생체 로그인 등록',
+      message: '이 기기에서 Face ID / 지문으로 로그인하시겠어요?',
+      confirmButtonText: '등록',
+      cancelButtonText: '나중에'
+    })
+
+    // confirm 시에만 도달 (cancel 은 reject → catch 에서 무시)
+    await registerBiometric()
+    Toast.success('생체 로그인이 등록되었습니다')
+  } catch (error) {
+    // 사용자가 '나중에'를 누르면 Dialog 가 reject(문자열 'cancel')하므로 조용히 통과
+    if (error === 'cancel') {
+      return
+    }
+    console.error('Biometric enrollment skipped:', error)
+    // 등록 실패는 안내만 하고 가입 흐름은 계속 진행
+    Toast('생체 로그인 등록을 건너뛰었습니다')
+  }
+}
+
 const handleRegister = async () => {
   // KIS 계좌 정보 검증
   if (stockInvestment.value) {
@@ -174,6 +205,9 @@ const handleRegister = async () => {
 
       // 회원가입 데이터 정리
       authStore.clearRegistrationData()
+
+      // 생체 로그인(패스키) 등록 권유 — 실패/취소해도 가입 흐름은 막지 않음
+      await promptBiometricEnrollment()
 
       // Toast를 보여주고 홈 화면으로 이동
       setTimeout(() => {

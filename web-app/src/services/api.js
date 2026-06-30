@@ -107,6 +107,15 @@ export const authApi = {
   validateKisAccount: (kisData) => api.post('/auth/validate-kis-account', kisData)
 }
 
+// WebAuthn (생체 로그인/패스키) API
+// register/* 는 JWT 필요(로그인 상태에서 기기 등록), login/* 은 공개(usernameless)
+export const webauthnApi = {
+  registerStart: () => api.post('/auth/webauthn/register/start'),
+  registerFinish: (data) => api.post('/auth/webauthn/register/finish', data),
+  loginStart: () => api.post('/auth/webauthn/login/start'),
+  loginFinish: (data) => api.post('/auth/webauthn/login/finish', data)
+}
+
 // User API
 export const userApi = {
   getProfile: () => api.get('/users/me'),
