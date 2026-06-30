@@ -5,7 +5,7 @@ AI 주식 자동매매 시스템 데이터베이스 스키마 문서
 ## 개요
 
 - **DBMS**: PostgreSQL 16
-- **총 테이블 수**: 20개 (+ 뷰 4개)
+- **총 테이블 수**: 21개 (+ 뷰 4개)
 - **스키마**: 단일 public 스키마 (MVP 단순화)
 - **스키마 소스(편집 대상)**: **Liquibase** changelog (`api-server/src/main/resources/db/changelog/`)
 
@@ -44,7 +44,7 @@ database/
 
 ## 테이블 목록
 
-### 1. 사용자 & 인증 (5개)
+### 1. 사용자 & 인증 (6개)
 
 | 테이블명 | 설명 | 주요 컬럼 |
 |---------|------|-----------|
@@ -53,6 +53,9 @@ database/
 | `user_kis_accounts` | 사용자별 KIS API 키 (1:1) | user_id, account_number, app_key, app_secret (Jasypt 암호화), is_verified, **hts_id**(v1.11, 평문 — 실시간 체결통보 tr_key) |
 | `user_trade_config` | 자동매매 설정 (1:1) | user_id, order_amount, max_holdings, order_type, **is_active** |
 | `user_settings` | UI 설정 (1:1) | user_id, asset_order(JSONB), dark_mode, auto_login, notifications(JSONB) |
+| `webauthn_credentials` | WebAuthn 생체/패스키 자격증명 (v1.14) | credential_id(Base64URL, unique), user_id FK→users(id), public_key_cose, signature_count, transports, created_at |
+
+> `webauthn_credentials`는 생체/패스키 로그인용 자격증명을 저장한다. `credential_id`↔`user_id` **1:1 매핑**이며, WebAuthn user_handle 은 `user_id`에서 8바이트로 파생한다(별도 컬럼 없음, usernameless 로그인 시 역조회). 등록은 가입 이후 JWT 인증 상태에서(`/auth/webauthn/register/*`), 로그인은 public usernameless(`/auth/webauthn/login/*`)로 수행한다. 상세는 [`../api-server/_docs/AUTHENTICATION_FLOW.md`](../api-server/_docs/AUTHENTICATION_FLOW.md)의 WebAuthn 섹션 참고.
 
 ### 2. 분석 데이터 (7개)
 

@@ -10,9 +10,9 @@
 
 | 상태 | 개수 | 화면 |
 |------|------|------|
-| ⭕ 완료 | 16 | LoginView, RegisterFinanceView, ResetPasswordView, ProfileView, BotView, CompanyDetailView, MarketAnalysisView, AssetsView, SettingsView, SearchView, FavoritesView, AssetDetailView, TermsView, TradingView, TransactionsView, HomeView |
+| ⭕ 완료 | 17 | LoginView, RegisterFinanceView, ResetPasswordView, ProfileView, BotView, CompanyDetailView, MarketAnalysisView, AssetsView, SettingsView, SearchView, FavoritesView, AssetDetailView, TermsView, TradingView, TransactionsView, HomeView, WelcomeView |
 | 🔺 부분 | 1 | RegisterView |
-| ❌ UI만 | 4 | SplashView, WelcomeView, NewsView, NewsDetailView |
+| ❌ UI만 | 3 | SplashView, NewsView, NewsDetailView |
 
 > TradingView는 매수/매도 + 미체결 + 실시간 호가 + 주문가능 수량/금액까지 실데이터. 예약주문만 추후 지원.
 > **해외주식(US) 국내 수준 동등화 완료**: 매수/매도·잔고·현재가·검색 + 거래내역(`/overseas/history`)·미체결(`/overseas/pending-orders`)·주문가능(`/overseas/orderable`)·**1호가**(`/overseas/stocks/{symbol}/orderbook`, HHDFS76200100)·실시간 체결가(HDFSCNT0)·**실시간 체결통보**(H0GSCNI0, fills 플래그 뒤)까지. **구조적 미지원: 미국 외 타국가, 10호가 depth(KIS가 미국은 1호가만 제공).** 코인 비활성 유지.
@@ -25,7 +25,7 @@
 | 화면 | 상태 | 메모 |
 |------|:----:|------|
 | SplashView | ❌ | 네비게이션만 수행, API 통신 없음 (의도된 스플래시 화면) |
-| WelcomeView | ❌ | UI·네비게이션만. Face ID 로그인 버튼 미구현 |
+| WelcomeView | ⭕ | Face ID 로그인 **구현**(WebAuthn 패스키 — `/auth/webauthn/login/start\|finish`, usernameless). 지원 기기에서만 버튼 노출(미지원 시 숨김). 실제 생체 프롬프트는 HTTPS+실기기에서만 검증 가능 |
 | LoginView | ⭕ | `authApi.login` 호출 + 토큰 저장 + 에러 처리 완비 |
 | RegisterView | 🔺 | 아이디/이메일 중복확인은 실 API(`checkUsername`/`checkEmail`). 실제 가입은 다음 단계(RegisterFinanceView)에서 처리 |
 | RegisterFinanceView | ⭕ | `validateKisAccount` + `register` 연동, KIS 계정 인증 후 가입 완료 |
