@@ -5,6 +5,8 @@ import com.inbeom.apiserver.domain.User;
 import com.inbeom.apiserver.domain.UserKisAccount;
 import com.inbeom.apiserver.domain.UserTradeConfig;
 import com.inbeom.apiserver.dto.auth.*;
+import com.inbeom.apiserver.exception.BusinessException;
+import com.inbeom.apiserver.exception.KisAccountNotFoundException;
 import com.inbeom.apiserver.repository.RefreshTokenRepository;
 import com.inbeom.apiserver.repository.UserKisAccountRepository;
 import com.inbeom.apiserver.repository.UserRepository;
@@ -151,7 +153,7 @@ class AuthServiceTest {
 
             // when & then
             assertThatThrownBy(() -> authService.register(registerRequest))
-                    .isInstanceOf(IllegalArgumentException.class)
+                    .isInstanceOf(BusinessException.class)
                     .hasMessage("Password confirmation does not match");
 
             then(userRepository).should(never()).save(any(User.class));
@@ -165,7 +167,7 @@ class AuthServiceTest {
 
             // when & then
             assertThatThrownBy(() -> authService.register(registerRequest))
-                    .isInstanceOf(IllegalArgumentException.class)
+                    .isInstanceOf(BusinessException.class)
                     .hasMessage("Username already exists");
 
             then(userRepository).should(never()).save(any(User.class));
@@ -180,7 +182,7 @@ class AuthServiceTest {
 
             // when & then
             assertThatThrownBy(() -> authService.register(registerRequest))
-                    .isInstanceOf(IllegalArgumentException.class)
+                    .isInstanceOf(BusinessException.class)
                     .hasMessage("Email already exists");
 
             then(userRepository).should(never()).save(any(User.class));
@@ -254,8 +256,8 @@ class AuthServiceTest {
 
             // when & then
             assertThatThrownBy(() -> authService.login(loginRequest))
-                    .isInstanceOf(BadCredentialsException.class)
-                    .hasMessage("KIS account not found for user");
+                    .isInstanceOf(KisAccountNotFoundException.class)
+                    .hasMessageContaining("KIS account not found");
 
             then(jwtTokenProvider).should(never()).generateAccessToken(anyString(), anyLong(), anyLong());
         }
@@ -329,7 +331,7 @@ class AuthServiceTest {
 
             // when & then
             assertThatThrownBy(() -> authService.resetPassword(resetRequest))
-                    .isInstanceOf(IllegalArgumentException.class)
+                    .isInstanceOf(BusinessException.class)
                     .hasMessage("Password confirmation does not match");
 
             then(userRepository).should(never()).save(any(User.class));
@@ -343,7 +345,7 @@ class AuthServiceTest {
 
             // when & then
             assertThatThrownBy(() -> authService.resetPassword(resetRequest))
-                    .isInstanceOf(IllegalArgumentException.class)
+                    .isInstanceOf(BusinessException.class)
                     .hasMessage("User not found or phone number mismatch");
 
             then(userRepository).should(never()).save(any(User.class));
@@ -358,7 +360,7 @@ class AuthServiceTest {
 
             // when & then
             assertThatThrownBy(() -> authService.resetPassword(resetRequest))
-                    .isInstanceOf(IllegalArgumentException.class)
+                    .isInstanceOf(BusinessException.class)
                     .hasMessage("User not found or phone number mismatch");
 
             then(userRepository).should(never()).save(any(User.class));
@@ -495,7 +497,7 @@ class AuthServiceTest {
 
             // when & then
             assertThatThrownBy(() -> authService.refreshToken(refreshRequest))
-                    .isInstanceOf(BadCredentialsException.class)
+                    .isInstanceOf(BusinessException.class)
                     .hasMessage("Invalid refresh token");
 
             then(refreshTokenRepository).should(never()).findByToken(anyString());
@@ -510,7 +512,7 @@ class AuthServiceTest {
 
             // when & then
             assertThatThrownBy(() -> authService.refreshToken(refreshRequest))
-                    .isInstanceOf(BadCredentialsException.class)
+                    .isInstanceOf(BusinessException.class)
                     .hasMessage("Refresh token not found");
 
             then(jwtTokenProvider).should(never()).generateAccessToken(anyString(), anyLong(), anyLong());
@@ -526,7 +528,7 @@ class AuthServiceTest {
 
             // when & then
             assertThatThrownBy(() -> authService.refreshToken(refreshRequest))
-                    .isInstanceOf(BadCredentialsException.class)
+                    .isInstanceOf(BusinessException.class)
                     .hasMessage("Refresh token has been revoked");
 
             then(jwtTokenProvider).should(never()).generateAccessToken(anyString(), anyLong(), anyLong());

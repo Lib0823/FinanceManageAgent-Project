@@ -3,6 +3,9 @@ package com.inbeom.apiserver.service;
 import com.inbeom.apiserver.client.KisApiClient;
 import com.inbeom.apiserver.domain.TradeHistory;
 import com.inbeom.apiserver.domain.User;
+import com.inbeom.apiserver.domain.UserKisAccount;
+import com.inbeom.apiserver.dto.kis.KisDailyCcldResponse;
+import com.inbeom.apiserver.dto.trade.TradeHistoryResponse;
 import com.inbeom.apiserver.repository.TradeHistoryRepository;
 import com.inbeom.apiserver.repository.UserRepository;
 import com.inbeom.apiserver.service.KisAuthService.KisCredentials;
@@ -189,41 +192,66 @@ class TradingServiceTest {
     }
 
     @Test
-    @DisplayName("getTradeHistory - 사용자 거래 내역 조회 성공")
+    @DisplayName("getTradeHistory - 사용자 거래 내역 조회 성공 (KIS inquire-daily-ccld 직접 조회)")
     void getTradeHistory_Success() {
-        // Given
-        TradeHistory history1 = TradeHistory.builder()
-                .user(mockUser)
-                .stockCode("005930")
-                .stockName("삼성전자")
-                .orderType("BUY")
-                .orderStatus("EXECUTED")
-                .quantity(10)
-                .orderPrice(new BigDecimal("70000"))
-                .build();
+        // Given: 거래내역은 DB가 아니라 KIS API(VTTC0081R)를 직접 조회해 TradeHistoryResponse 로 매핑한다.
+        UserKisAccount kisAccount = mock(UserKisAccount.class);
+        User userWithKis = mock(User.class);
+        when(userWithKis.getKisAccount()).thenReturn(kisAccount);
+        when(kisAccount.getId()).thenReturn(kisAccountId);
 
-        TradeHistory history2 = TradeHistory.builder()
-                .user(mockUser)
-                .stockCode("000660")
-                .stockName("SK하이닉스")
-                .orderType("SELL")
-                .orderStatus("EXECUTED")
-                .quantity(5)
-                .orderPrice(new BigDecimal("120000"))
-                .build();
+        KisDailyCcldResponse.DailyCcldItem item1 = new KisDailyCcldResponse.DailyCcldItem();
+        item1.setOdno("ORDER001");
+        item1.setPdno("005930");
+        item1.setPrdtName("삼성전자");
+        item1.setSllBuyDvsnCd("02");  // 02: 매수 → BUY
+        item1.setOrdDt("20260601");
+        item1.setOrdTmd("093000");
+        item1.setOrdQty("10");
+        item1.setOrdUnpr("70000");
+        item1.setTotCcldQty("10");
+        item1.setTotCcldAmt("700000");
+        item1.setAvgPrvs("70000");
 
-        when(tradeHistoryRepository.findByUserIdOrderByOrderedAtDesc(userId))
-                .thenReturn(List.of(history1, history2));
+        KisDailyCcldResponse.DailyCcldItem item2 = new KisDailyCcldResponse.DailyCcldItem();
+        item2.setOdno("ORDER002");
+        item2.setPdno("000660");
+        item2.setPrdtName("SK하이닉스");
+        item2.setSllBuyDvsnCd("01");  // 01: 매도 → SELL
+        item2.setOrdDt("20260601");
+        item2.setOrdTmd("100500");
+        item2.setOrdQty("5");
+        item2.setOrdUnpr("120000");
+        item2.setTotCcldQty("5");
+        item2.setTotCcldAmt("600000");
+        item2.setAvgPrvs("120000");
+
+        KisDailyCcldResponse kisResponse = new KisDailyCcldResponse();
+        kisResponse.setRtCd("0");
+        kisResponse.setOutput1(List.of(item1, item2));
+
+        when(userRepository.findById(userId)).thenReturn(Optional.of(userWithKis));
+        when(kisAuthService.getKisAccessToken(kisAccountId)).thenReturn(mockKisToken);
+        when(kisAuthService.getKisCredentials(kisAccountId)).thenReturn(mockCredentials);
+        when(kisApiClient.get(
+                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyMap(), eq(KisDailyCcldResponse.class)
+        )).thenReturn(new ResponseEntity<>(kisResponse, HttpStatus.OK));
 
         // When
-        List<TradeHistory> result = tradingService.getTradeHistory(userId);
+        List<TradeHistoryResponse> result = tradingService.getTradeHistory(userId);
 
         // Then
         assertThat(result).hasSize(2);
         assertThat(result.get(0).getStockCode()).isEqualTo("005930");
+        assertThat(result.get(0).getOrderType()).isEqualTo("BUY");
+        assertThat(result.get(0).getId()).isEqualTo("ORDER001");
         assertThat(result.get(1).getStockCode()).isEqualTo("000660");
+        assertThat(result.get(1).getOrderType()).isEqualTo("SELL");
 
-        verify(tradeHistoryRepository, times(1)).findByUserIdOrderByOrderedAtDesc(userId);
+        verify(kisApiClient, times(1)).get(
+                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyMap(), eq(KisDailyCcldResponse.class));
     }
 
     @Test
